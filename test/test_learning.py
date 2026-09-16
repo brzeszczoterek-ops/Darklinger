@@ -44,7 +44,15 @@ from v_core.learning import (
     validate_instance,
     validate_schema,
     audit_learning_store,
+    repair_generated_source_argument_alias,
+    repair_generated_source_json_wrapper,
 )
+from v_core.generated_tool_contract import (
+    GeneratedToolContract,
+    GeneratedToolTest,
+    autonomous_web_traffic_contract,
+)
+from v_core.learning.source_builder import source_argument_defaults
 from v_core.learning.snapshot_extractor import (
     extract_accessibility_product_cards,
     product_card_fixture,
@@ -79,6 +87,190 @@ DOUBLE_SOURCE = """
 def run(arguments):
     return {"result": arguments["value"] * 2}
 """.strip()
+
+
+@pytest.mark.parametrize("alias", ["har Json", "har-json", "harJson"])
+def test_generated_source_repairs_one_unambiguous_runtime_field_alias(
+    alias: str,
+) -> None:
+    contract = autonomous_web_traffic_contract(
+        "Stwórz narzędzie do monitorowania ruchu WWW i sama wybierz stronę."
+    )
+    assert contract is not None
+    source = (
+        "def run(arguments):\n"
+        f"    return {{'value': arguments[{alias!r}]}}\n"
+    )
+
+    repaired, changes = repair_generated_source_argument_alias(source, contract)
+
+    assert changes == ((alias, "har_json"),)
+    assert source_argument_defaults(repaired)[0] == {"har_json"}
+
+
+def test_generated_source_alias_repair_leaves_ambiguous_fields_untouched() -> None:
+    contract = autonomous_web_traffic_contract(
+        "Stwórz narzędzie do monitorowania ruchu WWW i sama wybierz stronę."
+    )
+    assert contract is not None
+    source = (
+        "def run(arguments):\n"
+        "    return {'value': arguments['harJson'] + arguments['payload']}\n"
+    )
+
+    repaired, changes = repair_generated_source_argument_alias(source, contract)
+
+    assert repaired == source
+    assert changes == ()
+
+    two_field_contract = GeneratedToolContract(
+        tests=(
+            GeneratedToolTest(
+                arguments={"har_json": "{}", "limit": 10},
+                expected={"value": 1},
+                evidence_quote="runtime fixture",
+            ),
+        ),
+        final_arguments={"har_json": "{}", "limit": 10},
+        final_evidence_quote="runtime fixture",
+    )
+    single_alias_source = (
+        "def run(arguments):\n"
+        "    return {'value': arguments['payload']}\n"
+    )
+
+    repaired, changes = repair_generated_source_argument_alias(
+        single_alias_source,
+        two_field_contract,
+    )
+
+    assert repaired == single_alias_source
+    assert changes == ()
+
+
+def test_generated_source_alias_repair_only_changes_run_argument_subscripts() -> None:
+    contract = autonomous_web_traffic_contract(
+        "Stwórz narzędzie do monitorowania ruchu WWW i sama wybierz stronę."
+    )
+    assert contract is not None
+    source = (
+        "def run(arguments):\n"
+        "    label = 'harJson'\n"
+        "    nested = {'harJson': 'untouched'}\n"
+        "    return {'value': arguments['harJson'], 'label': label, "
+        "'nested': nested['harJson']}\n"
+    )
+
+    repaired, changes = repair_generated_source_argument_alias(source, contract)
+    namespace: dict[str, object] = {}
+    exec(compile(repaired, "<generated>", "exec"), namespace)
+
+    assert changes == (("harJson", "har_json"),)
+    assert namespace["run"]({"har_json": "payload"}) == {
+        "value": "payload",
+        "label": "harJson",
+        "nested": "untouched",
+    }
+
+
+def test_generated_source_alias_repair_does_not_enter_shadowing_function() -> None:
+    contract = autonomous_web_traffic_contract(
+        "Stwórz narzędzie do monitorowania ruchu WWW i sama wybierz stronę."
+    )
+    assert contract is not None
+    source = (
+        "def run(arguments):\n"
+        "    def unrelated(arguments):\n"
+        "        return arguments['harJson']\n"
+        "    return {'value': arguments['harJson'], 'nested': unrelated({'harJson': 2})}\n"
+    )
+
+    repaired, changes = repair_generated_source_argument_alias(source, contract)
+    namespace: dict[str, object] = {}
+    exec(compile(repaired, "<generated>", "exec"), namespace)
+
+    assert changes == (("harJson", "har_json"),)
+    assert namespace["run"]({"har_json": 1}) == {"value": 1, "nested": 2}
+
+
+def test_generated_source_repairs_one_unambiguous_json_wrapper() -> None:
+    contract = autonomous_web_traffic_contract(
+        "Stwórz narzędzie do monitorowania ruchu WWW i sama wybierz stronę."
+    )
+    assert contract is not None
+    source = (
+        "def run(arguments):\n"
+        "    import json\n"
+        "    raw = arguments['har_json']\n"
+        "    document = json.loads(raw)\n"
+        "    entries = document.get('entries', [])\n"
+        "    return {\n"
+        "        'requests_count': len(entries),\n"
+        "        'domains': sorted({row['request']['url'].split('://', 1)[-1].split('/', 1)[0] for row in entries}),\n"
+        "        'error_count': sum(row['response']['status'] >= 400 for row in entries),\n"
+        "        'total_time_ms': sum(max(0, row['time']) for row in entries),\n"
+        "    }\n"
+    )
+
+    repaired, changes = repair_generated_source_json_wrapper(source, contract)
+    namespace: dict[str, object] = {}
+    exec(compile(repaired, "<generated>", "exec"), namespace)
+
+    assert changes == (("har_json", "log"),)
+    for case in contract.tests:
+        assert namespace["run"](case.arguments) == case.expected
+
+
+def test_generated_source_json_wrapper_repair_fails_closed_on_ambiguous_shape() -> None:
+    contract = GeneratedToolContract(
+        tests=(
+            GeneratedToolTest(
+                arguments={
+                    "payload": json.dumps(
+                        {"left": {"items": []}, "right": {"items": []}}
+                    )
+                },
+                expected={"count": 0},
+                evidence_quote="runtime fixture",
+            ),
+        ),
+        final_arguments={
+            "payload": json.dumps(
+                {"left": {"items": []}, "right": {"items": []}}
+            )
+        },
+        final_evidence_quote="runtime fixture",
+    )
+    source = (
+        "import json\n"
+        "def run(arguments):\n"
+        "    document = json.loads(arguments['payload'])\n"
+        "    return {'count': len(document.get('items', []))}\n"
+    )
+
+    repaired, changes = repair_generated_source_json_wrapper(source, contract)
+
+    assert repaired == source
+    assert changes == ()
+
+
+def test_generated_source_json_wrapper_repair_keeps_correct_root_access() -> None:
+    contract = autonomous_web_traffic_contract(
+        "Stwórz narzędzie do monitorowania ruchu WWW i sama wybierz stronę."
+    )
+    assert contract is not None
+    source = (
+        "import json\n"
+        "def run(arguments):\n"
+        "    document = json.loads(arguments['har_json'])\n"
+        "    entries = document.get('log', {}).get('entries', [])\n"
+        "    return {'requests_count': len(entries)}\n"
+    )
+
+    repaired, changes = repair_generated_source_json_wrapper(source, contract)
+
+    assert repaired == source
+    assert changes == ()
 PRODUCT_SNAPSHOT = """
 - article:
   - link:

@@ -1,5 +1,90 @@
 # V-Core Changelog
 
+## Unreleased
+
+### Added
+- Source-only tool creation now accepts an explicit, immutable JSON
+  `tool_contract`, isolates code-generation context from stale chat claims, and
+  provides bounded runtime rejection feedback for repair attempts. A synthetic
+  HAR summary trial covers sandbox validation, holdout execution, and reload
+  from persistent storage.
+- A Full-edition passive Tor OSINT inventory tool performs bounded same-origin
+  GET-only collection for one exact v3 onion origin. It records per-page status,
+  timestamps, titles, content hashes, excerpts, discovery parents, and partial
+  coverage without JavaScript, forms, credentials, redirects, or cross-origin
+  navigation.
+- Tor discovery results now carry explicit candidate provenance and remain
+  `candidate_unverified` until a matching fetch or inventory call succeeds.
+  A report request cannot complete on an unobserved search candidate.
+
+### Fixed
+- Empty generated-source responses now count as recorded draft failures and
+  receive bounded repair attempts. They no longer end the loop with a misleading
+  32-step exhaustion report. Rejection evidence includes the provider finish
+  reason; three stagnant empty drafts stop creation without activating a tool.
+- Source-only code generation receives the artifact HTTP timeout even when no
+  tool schema is exposed to the model. The executor also bounds its first
+  awaited operation to 600 seconds; later creation operations retain the
+  remaining shared creation budget.
+- Generated-source parsing recovers standalone leading identifiers from broken
+  output, preserves actual module statements, and rejects duplicate synchronous
+  or asynchronous `run` entrypoints, including after prose. It cannot silently
+  select the last function from a rejected complete module.
+- Embedded URLs in structured tool-test data no longer trigger browser routing;
+  malformed generated source is classified as a candidate rejection rather than
+  a provider outage, while genuine execution failures still open recovery
+  circuits.
+- An online research-and-creation follow-up cannot finish through the local
+  tool-catalog shortcut. Conflicting classifications are retried with the
+  requested operations preserved. Referential searches bind a numbered owner
+  message and derive the query from its original text; missing or ambiguous
+  subjects stop before search. Prior assistant replies cannot supply the subject.
+- Capability replies exclude previous assistant execution claims from their
+  conversational history and explicitly answer the feasibility question.
+- Questions about whether V can create a tool or skill remain capability
+  discussion and no longer become creation commands. Explicit imperatives and
+  polite requests such as `could you create` remain executable, while
+  `are you able to create` stays tool-free.
+- Tor search now recognizes bare v3 onion references as well as fully qualified
+  HTTP/HTTPS links, while still normalizing them to bounded web targets.
+- Passive inventory follows document navigation anchors rather than stylesheet,
+  favicon, or OpenSearch resource links.
+- Owner-stated Tor inventory page and depth limits are extracted with exact
+  evidence from the current message and bound by the runtime, so a tool-use model
+  cannot omit or enlarge the requested crawl budget.
+- A failed Tor inventory now reports its concrete record-level connection error
+  instead of hiding a timeout behind a generic non-success status.
+- Tor inventory evidence is compacted into valid bounded JSON before entering
+  the agent trace. Once the evidence contract is satisfied, PALADYN renders a
+  deterministic report from those observations instead of asking the model to
+  reinterpret them. Unsupported safety, ownership, or unseen-content claims
+  therefore cannot leak into the final report.
+- A prohibition such as `do not use JavaScript` remains a passive-execution
+  constraint and no longer forces the owner-assisted browser path. That path is
+  reserved for an explicit CAPTCHA, private window, or interactive session.
+
+### Verification scope
+- On 2026-09-16, 1012 Full and 943 freshly exported Public tests passed. An isolated replay of a previously
+  failed live HAR draft passed sandbox validation, a separate final input, an
+  unseen input, and execution after loading a fresh runtime using the corrected
+  parser. A fresh AgenticQwen trial then completed creation, three sandbox
+  comparisons, final execution, holdout execution, and runtime reload. The first
+  truncated draft was rejected; the second succeeded. It took about ten minutes,
+  so this verifies the bounded local HAR scenario, not acceptable latency or
+  arbitrary generated tools. The counts below belong to the earlier verification run.
+- 967 Full and 898 Public tests passed. Follow-up routing and reference selection
+  were separately checked on live Mythos, including the reported Polish message.
+  This verifies classification and search scope, not end-to-end creation of the
+  requested tool. See `docs/followup-routing-validation.md`.
+  In an isolated AgenticQwen run, the
+  exact Polish capability question completed as conversation without creating
+  a task contract or invoking a tool. In a separate run, a Polish two-page
+  limit was preserved through classification
+  and the runtime fetched exactly two pages from the official Tor Project onion
+  origin. The final answer came from the compact runtime evidence without
+  another model generation. A separate visible private-Firefox run reached the
+  same onion origin through Tor with JavaScript disabled and then closed cleanly.
+
 ## 3.10 - 2026-09-09
 
 ### Verification scope

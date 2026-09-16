@@ -123,6 +123,7 @@ class LLM:
         max_tokens: int | None = None,
         temperature: float | None = None,
         response_format: dict[str, Any] | None = None,
+        artifact_generation: bool = False,
     ) -> LLMResponse:
         """Return prose and native tool calls without discarding either.
 
@@ -145,12 +146,16 @@ class LLM:
             for item in tools or []
             if isinstance(item, dict) and isinstance(item.get("function"), dict)
         }
-        if tool_names & {"learning_create_tool", "learning_create_skill"}:
+        if artifact_generation or tool_names & {
+            "learning_create_tool",
+            "learning_create_skill",
+        }:
             # A generated artifact contains schemas, source, and deterministic
             # tests. On a local 2-4 token/s model that can legitimately take
             # several minutes even though an ordinary chat turn should still
-            # fail quickly. Apply a per-request override so the artifact path
-            # does not inherit the short conversational HTTP timeout.
+            # fail quickly. The source-writing turn has no creation tool schema,
+            # so its caller marks the phase explicitly; otherwise it would
+            # inherit the short conversational HTTP timeout.
             request["timeout"] = max(
                 float(os.getenv("V_CORE_TIMEOUT", "300")),
                 float(os.getenv("V_CORE_ARTIFACT_TIMEOUT", "1200")),

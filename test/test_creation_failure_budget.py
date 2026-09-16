@@ -74,7 +74,8 @@ async def test_failure_report_does_not_echo_untrusted_errors_or_claim_saved_prot
 
 
 @pytest.mark.asyncio
-async def test_rejected_source_drafts_stop_before_fourth_generation(tmp_path):
+@pytest.mark.parametrize("draft", ["invalid source draft", "", "  \n"])
+async def test_rejected_source_drafts_stop_before_fourth_generation(tmp_path, draft):
     class Tools:
         def __init__(self):
             self.calls = []
@@ -106,7 +107,7 @@ async def test_rejected_source_drafts_stop_before_fourth_generation(tmp_path):
         async def respond(self, **kwargs):
             self.turns += 1
             assert self.turns <= 3, "must stop before a fourth source draft"
-            return LLMResponse(content=f"Draft {self.turns}: no run function yet")
+            return LLMResponse(content=draft, finish_reason="length")
 
     class Memory:
         session = Session()
@@ -135,6 +136,8 @@ async def test_rejected_source_drafts_stop_before_fourth_generation(tmp_path):
     assert [call["tool"] for call in checkpoint["tool_calls"]] == [
         "runtime_validate_generated_tool_source"
     ] * 3
+    assert all(call["arguments"]["finish_reason"] == "length"
+               for call in checkpoint["tool_calls"])
 
 
 @pytest.mark.asyncio

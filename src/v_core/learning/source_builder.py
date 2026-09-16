@@ -85,34 +85,310 @@ def source_argument_defaults(source: str) -> tuple[set[str], dict[str, Any]]:
     argument_name = run.args.args[0].arg
     fields: set[str] = set()
     defaults: dict[str, Any] = {}
-    for node in ast.walk(run):
-        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
-            if node.value.id != argument_name:
-                continue
-            key = _literal_string(node.slice)
-            if key:
-                fields.add(key)
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
-            continue
-        if (
-            node.func.attr != "get"
-            or not isinstance(node.func.value, ast.Name)
-            or node.func.value.id != argument_name
-            or not node.args
+
+    class _RunArgumentUsage(ast.NodeVisitor):
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            return None
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            return None
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            return None
+
+        def visit_Subscript(self, node: ast.Subscript) -> None:
+            if isinstance(node.value, ast.Name) and node.value.id == argument_name:
+                key = _literal_string(node.slice)
+                if key:
+                    fields.add(key)
+            self.generic_visit(node)
+
+        def visit_Call(self, node: ast.Call) -> None:
+            if (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == argument_name
+                and node.args
+            ):
+                key = _literal_string(node.args[0])
+                if key:
+                    fields.add(key)
+                    if len(node.args) >= 2:
+                        try:
+                            default = ast.literal_eval(node.args[1])
+                            json.dumps(default, allow_nan=False)
+                        except (TypeError, ValueError):
+                            pass
+                        else:
+                            defaults[key] = default
+            self.generic_visit(node)
+
+    usage = _RunArgumentUsage()
+    for statement in run.body:
+        usage.visit(statement)
+    return fields, defaults
+
+
+def repair_generated_source_argument_alias(
+    source: str,
+    generated_contract: GeneratedToolContract,
+) -> tuple[str, tuple[tuple[str, str], ...]]:
+    """Repair one unambiguous model-written alias for a runtime-owned field.
+
+    The frozen contract owns the wire names.  A small code model may still
+    spell the sole input as camelCase, kebab-case, or natural-language text.
+    When there is exactly one missing contract field and exactly one unknown
+    source field, rewrite only string subscripts on ``run``'s arguments object.
+    Every ambiguous case is left untouched for the normal validator to reject.
+    """
+
+    try:
+        tree = ast.parse(source, mode="exec")
+    except SyntaxError:
+        return source, ()
+
+    run = next(
+        (
+            node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "run"
+        ),
+        None,
+    )
+    if run is None or not run.args.args:
+        return source, ()
+
+    expected_fields = {
+        str(name)
+        for case in generated_contract.tests
+        for name in case.arguments
+    }
+    expected_fields.update(str(name) for name in generated_contract.final_arguments)
+    source_fields, _ = source_argument_defaults(source)
+    missing = expected_fields - source_fields
+    unknown = source_fields - expected_fields
+    if len(missing) != 1 or len(unknown) != 1:
+        return source, ()
+
+    old_name = next(iter(unknown))
+    new_name = next(iter(missing))
+    argument_name = run.args.args[0].arg
+
+    class _ArgumentAliasRepair(ast.NodeTransformer):
+        replacements = 0
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
+            if node is not run:
+                return node
+            return self.generic_visit(node)
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AST:
+            if node is not run:
+                return node
+            return self.generic_visit(node)
+
+        def visit_Lambda(self, node: ast.Lambda) -> ast.AST:
+            return node
+
+        def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+            self.generic_visit(node)
+            if not (
+                isinstance(node.value, ast.Name)
+                and node.value.id == argument_name
+                and _literal_string(node.slice) == old_name
+            ):
+                return node
+            node.slice = ast.copy_location(ast.Constant(new_name), node.slice)
+            self.replacements += 1
+            return node
+
+    repair = _ArgumentAliasRepair()
+    repair.visit(run)
+    if repair.replacements == 0:
+        return source, ()
+
+    ast.fix_missing_locations(tree)
+    repaired = ast.unparse(tree)
+    repaired_fields, _ = source_argument_defaults(repaired)
+    if repaired_fields != expected_fields:
+        return source, ()
+    return repaired, ((old_name, new_name),)
+
+
+def repair_generated_source_json_wrapper(
+    source: str,
+    generated_contract: GeneratedToolContract,
+) -> tuple[str, tuple[tuple[str, str], ...]]:
+    """Insert one unambiguous runtime-observed JSON wrapper traversal.
+
+    This repairs a common transport mistake where generated code parses a JSON
+    input correctly but reads keys from the document root even though every
+    frozen fixture places those keys under the same sole object wrapper.  It is
+    data-shape driven, independent of the owner's language and the tool domain.
+    Ambiguous shapes or source flows are left for normal validation to reject.
+    """
+
+    try:
+        tree = ast.parse(source, mode="exec")
+    except SyntaxError:
+        return source, ()
+    run = next(
+        (
+            node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "run"
+        ),
+        None,
+    )
+    if run is None or not run.args.args:
+        return source, ()
+
+    argument_name = run.args.args[0].arg
+    contract_rows = [case.arguments for case in generated_contract.tests]
+    contract_rows.append(generated_contract.final_arguments)
+    wrapper_shapes: dict[str, tuple[str, tuple[dict[str, Any], ...]]] = {}
+    expected_fields = {str(name) for row in contract_rows for name in row}
+    for field in sorted(expected_fields):
+        parsed_rows: list[dict[str, Any]] = []
+        wrapper_name = ""
+        valid = True
+        for row in contract_rows:
+            raw = row.get(field)
+            if not isinstance(raw, str):
+                valid = False
+                break
+            try:
+                parsed = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                valid = False
+                break
+            if not isinstance(parsed, dict) or len(parsed) != 1:
+                valid = False
+                break
+            current_wrapper, nested = next(iter(parsed.items()))
+            if not isinstance(nested, dict):
+                valid = False
+                break
+            if wrapper_name and current_wrapper != wrapper_name:
+                valid = False
+                break
+            wrapper_name = str(current_wrapper)
+            parsed_rows.append(parsed)
+        if valid and wrapper_name and parsed_rows:
+            wrapper_shapes[field] = (wrapper_name, tuple(parsed_rows))
+    if not wrapper_shapes:
+        return source, ()
+
+    argument_aliases: dict[str, str] = {}
+    parsed_targets: dict[str, tuple[ast.Assign, str]] = {}
+    for statement in run.body:
+        if not (
+            isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
         ):
             continue
-        key = _literal_string(node.args[0])
-        if not key:
+        target_name = statement.targets[0].id
+        if isinstance(statement.value, ast.Subscript) and isinstance(
+            statement.value.value,
+            ast.Name,
+        ):
+            if statement.value.value.id == argument_name:
+                field = _literal_string(statement.value.slice)
+                if field:
+                    argument_aliases[target_name] = field
             continue
-        fields.add(key)
-        if len(node.args) >= 2:
-            try:
-                default = ast.literal_eval(node.args[1])
-                json.dumps(default, allow_nan=False)
-            except (TypeError, ValueError):
-                continue
-            defaults[key] = default
-    return fields, defaults
+        call = statement.value
+        if not (
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id == "json"
+            and call.func.attr == "loads"
+            and len(call.args) == 1
+        ):
+            continue
+        raw_input = call.args[0]
+        field = ""
+        if isinstance(raw_input, ast.Name):
+            field = argument_aliases.get(raw_input.id, "")
+        elif isinstance(raw_input, ast.Subscript) and isinstance(
+            raw_input.value,
+            ast.Name,
+        ) and raw_input.value.id == argument_name:
+            field = _literal_string(raw_input.slice) or ""
+        if field:
+            parsed_targets[target_name] = (statement, field)
+
+    direct_keys: dict[str, set[str]] = {name: set() for name in parsed_targets}
+
+    class _ParsedObjectAccess(ast.NodeVisitor):
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            return None
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            return None
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            return None
+
+        def visit_Subscript(self, node: ast.Subscript) -> None:
+            if isinstance(node.value, ast.Name) and node.value.id in direct_keys:
+                key = _literal_string(node.slice)
+                if key:
+                    direct_keys[node.value.id].add(key)
+            self.generic_visit(node)
+
+        def visit_Call(self, node: ast.Call) -> None:
+            if (
+                isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in direct_keys
+                and node.func.attr == "get"
+                and node.args
+            ):
+                key = _literal_string(node.args[0])
+                if key:
+                    direct_keys[node.func.value.id].add(key)
+            self.generic_visit(node)
+
+    access = _ParsedObjectAccess()
+    for statement in run.body:
+        access.visit(statement)
+
+    candidates: list[tuple[ast.Assign, str, str]] = []
+    for target_name, (statement, field) in parsed_targets.items():
+        shape = wrapper_shapes.get(field)
+        keys = direct_keys.get(target_name, set())
+        if shape is None or not keys:
+            continue
+        wrapper_name, parsed_rows = shape
+        if all(
+            all(key not in parsed and key in parsed[wrapper_name] for key in keys)
+            for parsed in parsed_rows
+        ):
+            candidates.append((statement, field, wrapper_name))
+    if len(candidates) != 1:
+        return source, ()
+
+    statement, field, wrapper_name = candidates[0]
+    statement.value = ast.copy_location(
+        ast.Subscript(
+            value=statement.value,
+            slice=ast.Constant(wrapper_name),
+            ctx=ast.Load(),
+        ),
+        statement.value,
+    )
+    ast.fix_missing_locations(tree)
+    repaired = ast.unparse(tree)
+    repaired_fields, _ = source_argument_defaults(repaired)
+    if repaired_fields != expected_fields:
+        return source, ()
+    return repaired, ((field, wrapper_name),)
 
 
 def build_source_blueprint(
@@ -148,9 +424,17 @@ def build_source_blueprint(
                 + "; ".join(details)
                 + ")"
             )
-        name = _tool_name(objective, source, name_hint)
-        description = description_hint.strip() or (
+        name = _tool_name(
+            objective,
+            source,
+            name_hint or generated_contract.name_hint,
+        )
+        description = (
+            description_hint.strip()
+            or generated_contract.description_hint.strip()
+            or (
             f"Process bounded JSON input for the current PALADYN task with {name}."
+            )
         )
         frozen_tests = tuple(
             (dict(case.arguments), dict(case.expected))
@@ -161,7 +445,7 @@ def build_source_blueprint(
             description=description[:500],
             arguments=dict(frozen_tests[0][0]),
             expected=dict(frozen_tests[0][1]),
-            oracle="owner_text_semantic_extraction",
+            oracle=generated_contract.provenance,
             tests=frozen_tests,
             final_arguments=dict(generated_contract.final_arguments),
         )

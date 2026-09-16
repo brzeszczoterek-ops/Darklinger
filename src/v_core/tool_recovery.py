@@ -63,6 +63,7 @@ BUILTIN_TOOL_CAPABILITIES: dict[str, tuple[str, ...]] = {
     "full_host_status": ("host.inspect",),
     "full_tor_search": ("network.tor.search",),
     "full_tor_fetch": ("network.tor.fetch",),
+    "full_tor_inventory": ("network.tor.inventory",),
     "full_tor_browser_inventory": ("network.tor.browser",),
     "full_tor_browser_close": ("network.tor.browser.close",),
     "evm_analyze_erc20_abi": ("evm.erc20.analyze",),
@@ -114,6 +115,10 @@ def _is_call_rejection(error: str, exception: Exception | None = None) -> bool:
     if isinstance(exception, (KeyError, TypeError, ValueError)):
         return True
     text = " ".join(str(error).casefold().split())
+    if text.startswith(("artifactvalidationerror:", "artifactpolicyerror:", "sourceblueprinterror:")):
+        # Rejection of candidate code is a working validator, not an outage.
+        # Also recognizes durable failures read after a runtime restart.
+        return True
     return any(
         marker in text
         for marker in (

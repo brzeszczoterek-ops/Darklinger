@@ -39,14 +39,20 @@ from .creation_budget import (
 from .generated_tool_contract import (
     GeneratedToolContract,
     GeneratedToolContractError,
+    autonomous_web_traffic_contract,
     extract_generated_tool_contract,
     has_natural_fixture_candidate,
 )
 from .response_preview import response_preview
 from .autonomy.local_read_scope import literal_paths, resolve_read_scope
+from .autonomy.search_reference import resolve_search_reference
 from .tool_catalog_review import review_catalog
 from .tool_self_test import test_local_tools
 from .llm import LLM
+from .learning.source_builder import (
+    repair_generated_source_argument_alias,
+    repair_generated_source_json_wrapper,
+)
 from .mcp_tools import MCPTools
 from .model_loader.router import classify_model_phase
 from .tool_dispatcher import ToolDispatcher
@@ -103,7 +109,16 @@ class Agent:
         }
     )
     READ_ONLY_WEB_TOOL_NAMES = frozenset(
-        {"web_read", "web_search", "browser_snapshot"}
+        {
+            "web_read",
+            "web_search",
+            "browser_snapshot",
+            "full_tor_search",
+            "full_tor_fetch",
+            "full_tor_inventory",
+            "full_tor_browser_inventory",
+            "full_tor_browser_close",
+        }
     )
     NETWORK_TOOL_NAMES = frozenset(
         {
@@ -117,6 +132,7 @@ class Agent:
             "browser_type",
             "full_tor_search",
             "full_tor_fetch",
+            "full_tor_inventory",
             "full_tor_browser_inventory",
             "full_tor_browser_close",
         }
@@ -177,6 +193,22 @@ class Agent:
         on_token: Callable[[str], None] | None = None,
     ) -> str:
 
+        try:
+            return await self._run_turn(prompt, on_token)
+        finally:
+            # MCP stdio contexts are task-affine.  The browser session is
+            # opened while executing this turn, so it must be closed by this
+            # same task rather than deferred to application shutdown.
+            close_browser = getattr(self.tools, "close_browser_session", None)
+            if callable(close_browser):
+                await close_browser()
+
+    async def _run_turn(
+        self,
+        prompt: str,
+        on_token: Callable[[str], None] | None = None,
+    ) -> str:
+
         prompt = prompt.strip()
 
         if not prompt:
@@ -228,6 +260,13 @@ class Agent:
             return await self._run_research_task(
                 prompt,
                 on_token,
+            )
+
+        if TaskContract.asks_about_creation_capability(prompt):
+            return await self._run_light_chat(
+                prompt,
+                on_token,
+                trace=self._start_agent_trace(prompt),
             )
 
         if self._is_light_conversation(prompt):
@@ -376,6 +415,19 @@ Current relationship stage: {stage}.
             if callable(context_loader)
             else self.memory.session.messages(limit=6, max_characters=6_000)
         )
+        if TaskContract.asks_about_creation_capability(prompt):
+            # Earlier assistant claims are not evidence of ability or failure.
+            # Preserve the owner's subject while excluding stale status replies.
+            history = [item for item in history if item.get("role") == "user"]
+            messages.append({
+                "role": "system",
+                "content": (
+                    "The current message asks about feasibility and your ability. "
+                    "Explain what could be built, what inputs it would need, and "
+                    "any uncertainty. No work is being performed in this reply. "
+                    "Do not replace that answer with a status of previous attempts."
+                ),
+            })
         messages.extend(history)
         messages.append({"role": "user", "content": prompt})
 
@@ -1097,7 +1149,14 @@ Current relationship stage: {stage}.
         semantic_classification_attempted = False
         preferred_web_query = ""
         preferred_web_target = extract_web_target(prompt) or ""
+        generated_tool_contract: GeneratedToolContract | None = None
         inherited_contract: TaskContract | None = None
+        trace_root = getattr(self, "_agent_trace_root", None)
+        previous_created_tool = (
+            AgentTaskTrace.latest_created_tool(trace_root)
+            if trace_root is not None
+            else None
+        )
         lexical_continuation = self._is_continuation_request(prompt)
         deterministic_action = self._requests_runtime_action(prompt, contract)
         if (
@@ -1112,6 +1171,56 @@ Current relationship stage: {stage}.
             )
         intent_router = getattr(self, "intent_router", None)
         classify_intent = getattr(intent_router, "classify", None)
+        exact_tor_inventory = (
+            not lexical_continuation
+            and "full_tor_inventory" in contract.required_tools
+        )
+        if exact_tor_inventory:
+            extract_tor_limits = getattr(
+                intent_router,
+                "extract_tor_inventory_limits",
+                None,
+            )
+            limits: tuple[int, int] | None = None
+            if callable(extract_tor_limits):
+                try:
+                    limits = await extract_tor_limits(prompt)
+                except Exception as error:
+                    if trace is not None:
+                        trace.record_event(
+                            "tor_inventory_limits_failed",
+                            {"error": f"{type(error).__name__}: {error}"[:2_000]},
+                        )
+            if limits is None:
+                answer = (
+                    "Boss, I couldn't verify the requested Tor crawl limits, so "
+                    "I stopped before opening the site. No Tor tool was run."
+                )
+                if trace is not None:
+                    trace.record_event(
+                        "tor_inventory_limits_blocked",
+                        {"reason": "invalid_or_missing_limit_classification"},
+                    )
+                evidence = self._block_agent_trace(
+                    trace,
+                    "Tor inventory limits could not be verified",
+                )
+                await self._remember_task(prompt, answer, execution=evidence)
+                if on_token is not None:
+                    on_token(answer)
+                return answer
+            max_pages, max_depth = limits
+            contract = contract.merged(
+                TaskContract(
+                    tor_inventory_max_pages=max_pages,
+                    tor_inventory_max_depth=max_depth,
+                )
+            )
+            if trace is not None:
+                trace.record_event(
+                    "tor_inventory_limits_classified",
+                    {"max_pages": max_pages, "max_depth": max_depth},
+                )
         if (
             not lexical_continuation
             and callable(classify_intent)
@@ -1122,6 +1231,7 @@ Current relationship stage: {stage}.
                     contract.requires_web_discovery
                     and contract.requires_evidence_report
                 )
+                or previous_created_tool is not None
             )
         ):
             semantic_classification_attempted = True
@@ -1191,6 +1301,12 @@ Current relationship stage: {stage}.
                                 "execute_created_artifact": (
                                     semantic_intent.execute_created_artifact
                                 ),
+                                "generated_tool_archetype": (
+                                    semantic_intent.generated_tool_archetype
+                                ),
+                                "delegates_test_target": (
+                                    semantic_intent.delegates_test_target
+                                ),
                                 "recall_memory": semantic_intent.recall_memory,
                                 "memory_query": semantic_intent.memory_query,
                                 "required_public_fields": list(
@@ -1233,7 +1349,16 @@ Current relationship stage: {stage}.
         if semantic_intent is not None:
             self._apply_language_intent(semantic_intent, trace)
 
-        if semantic_intent is not None and semantic_intent.capabilities in (("tool_catalog",), ("tool_self_test",)):
+        if (
+            semantic_intent is not None
+            and semantic_intent.capabilities in (("tool_catalog",), ("tool_self_test",))
+            and not any((
+                prompt_contract.requires_browser_navigation,
+                prompt_contract.requires_file_mutation,
+                prompt_contract.requires_created_tool,
+                prompt_contract.requires_created_skill,
+            ))
+        ):
             try:
                 definitions = await self.tools.openai_tool_definitions()
                 if semantic_intent.capabilities == ("tool_self_test",):
@@ -1408,7 +1533,10 @@ Current relationship stage: {stage}.
             trace,
             force=(
                 semantic_intent.continue_previous
-                if semantic_intent is not None
+                if (
+                    semantic_intent is not None
+                    and not self._contract_has_execution_route(prompt_contract)
+                )
                 else False
             ),
         )
@@ -1467,6 +1595,46 @@ Current relationship stage: {stage}.
                     {
                         "reason": "explicit_no_web_clause",
                         "semantic_web_requirements_discarded": True,
+                    },
+                )
+
+        autonomous_contract = autonomous_web_traffic_contract(
+            routing_prompt,
+            semantic_archetype=(
+                semantic_intent.generated_tool_archetype
+                if semantic_intent is not None
+                else ""
+            ),
+            delegates_test_target=(
+                semantic_intent.delegates_test_target
+                if semantic_intent is not None
+                else False
+            ),
+        )
+        if autonomous_contract is not None:
+            generated_tool_contract = autonomous_contract
+            preferred_web_target = "https://example.com"
+            preferred_web_query = ""
+            contract = replace(
+                contract,
+                requires_browser_navigation=True,
+                requires_browser_snapshot=True,
+                requires_web_discovery=False,
+                requires_distinct_detail_page=False,
+                minimum_detail_sources=0,
+                requires_created_tool=True,
+                requires_created_tool_execution=True,
+                requires_evidence_report=True,
+            )
+            capability_hints.update({"browser", "learning_tool"})
+            if trace is not None:
+                trace.record_event(
+                    "autonomous_generated_tool_contract_frozen",
+                    {
+                        "archetype": "client_har_summary",
+                        "test_target": preferred_web_target,
+                        "test_count": len(autonomous_contract.tests),
+                        "provenance": autonomous_contract.provenance,
                     },
                 )
 
@@ -1534,12 +1702,37 @@ Current relationship stage: {stage}.
                 trace.record_event("local_read_scope_bound", {"paths": list(read_scope)})
 
         if contract.requires_web_discovery:
+            referenced_subject = ""
+            if (
+                semantic_intent is not None
+                and semantic_intent.references_previous
+                and not prompt_contract.requires_created_tool
+                and not semantic_intent.web_query
+                and not semantic_intent.public_subject
+            ):
+                try:
+                    referenced_subject = await resolve_search_reference(
+                        self.llm, prompt,
+                        self.memory.session.messages(limit=6, max_characters=12000),
+                    )
+                except Exception as error:
+                    if trace is not None:
+                        trace.record_event("search_reference_failed", {
+                            "error_type": type(error).__name__,
+                        })
+                if not referenced_subject:
+                    return self._finish_missing_conversation_context(trace, on_token, prompt)
+                if trace is not None:
+                    trace.record_event("search_reference_bound", {
+                        "subject": referenced_subject,
+                        "source": "owner_dialogue_exact_span",
+                    })
             # The worker model may translate or shorten a query so aggressively
             # that it drops the actual subject (the observed run searched for
             # generic "AI problem solving" after Boss asked about CAPTCHA).
             # Search scope belongs to the runtime: derive it from the immutable
             # owner request and use the model only to operate the tools.
-            runtime_web_query = (
+            runtime_web_query = self._discovery_search_query(referenced_subject) if referenced_subject else (
                 self._public_fact_search_query(routing_prompt)
                 if contract.required_public_fields
                 else self._discovery_search_query(routing_prompt)
@@ -1697,6 +1890,55 @@ Current relationship stage: {stage}.
             if isinstance(item, dict)
             and item.get("function", {}).get("name")
         }
+        referenced_created_tool = ""
+        if (
+            semantic_intent is not None
+            and semantic_intent.references_previous
+            and semantic_intent.execute_created_artifact
+            and not prompt_contract.requires_created_tool
+            and isinstance(previous_created_tool, dict)
+        ):
+            referenced_created_tool = str(
+                previous_created_tool.get("name", "")
+            ).strip()
+            if referenced_created_tool:
+                contract = contract.with_required_tools(
+                    (referenced_created_tool,)
+                )
+                if trace is not None:
+                    trace.set_requirements(contract.to_dict())
+                    trace.record_event(
+                        "referenced_generated_tool_bound",
+                        {
+                            "tool": referenced_created_tool,
+                            "source_task_id": previous_created_tool.get(
+                                "task_id", ""
+                            ),
+                        },
+                    )
+                if referenced_created_tool not in catalog_names:
+                    answer = (
+                        "Boss, I resolved the earlier tool, but it is not in "
+                        "PALADYN's executable catalog now. I stopped instead of "
+                        "pretending it ran. Nothing is running in the background."
+                    )
+                    if trace is not None:
+                        trace.record_event(
+                            "referenced_generated_tool_unavailable",
+                            {"tool": referenced_created_tool},
+                        )
+                    evidence = self._block_agent_trace(
+                        trace,
+                        "referenced generated tool is unavailable",
+                    )
+                    await self._remember_task(
+                        prompt,
+                        answer,
+                        execution=evidence,
+                    )
+                    if on_token is not None:
+                        on_token(answer)
+                    return answer
         explicitly_named_tools = self._explicitly_named_tools(
             routing_prompt,
             tool_definitions,
@@ -1732,13 +1974,62 @@ Current relationship stage: {stage}.
             contract = contract.with_required_tools(required_explicit_tools)
             if trace is not None:
                 trace.set_requirements(contract.to_dict())
+        if referenced_created_tool:
+            missing_structured_inputs = self._missing_structured_tool_inputs(
+                routing_prompt,
+                referenced_created_tool,
+                tool_definitions,
+            )
+            if missing_structured_inputs:
+                answer = (
+                    "Boss, that tool needs structured observation data that this "
+                    "request does not provide. A page address is not that data, "
+                    "and I will not recycle its synthetic test fixture or invent "
+                    "traffic numbers. Supply a current export for the tool, or "
+                    "ask me to extend it with a real capture stage. Nothing was "
+                    "run and nothing is running in the background."
+                )
+                if trace is not None:
+                    trace.record_event(
+                        "referenced_generated_tool_input_missing",
+                        {
+                            "tool": referenced_created_tool,
+                            "fields": list(missing_structured_inputs),
+                        },
+                    )
+                    trace.await_owner(
+                        reason="referenced generated tool needs current structured input",
+                        step_limit=self.MAX_AGENT_STEPS,
+                        successful_tool_count=0,
+                        failed_tool_count=0,
+                        missing=[
+                            f"{referenced_created_tool}:{field}"
+                            for field in missing_structured_inputs
+                        ],
+                        progress_summary=None,
+                        accepted_commands=[
+                            "reply with the missing information",
+                            "/stop",
+                        ],
+                    )
+                    self._last_execution_context = AgentTaskTrace.latest_context(
+                        trace.root
+                    )
+                evidence = trace.evidence() if trace is not None else None
+                await self._remember_task(
+                    prompt,
+                    answer,
+                    execution=evidence,
+                )
+                if on_token is not None:
+                    on_token(answer)
+                return answer
         tool_definitions = self._select_tool_definitions(
             routing_prompt,
             contract,
             tool_definitions,
             capability_hints=capability_hints,
         )
-        generated_tool_contract: GeneratedToolContract | None = None
         source_only_builder = any(
             isinstance(item, dict)
             and item.get("function", {}).get("name") == "learning_create_tool"
@@ -1749,10 +2040,16 @@ Current relationship stage: {stage}.
         assignments = self._structured_literal_assignments(routing_prompt)
         if (
             source_only_builder
-            and contract.requires_created_tool_execution
-            and not assignments.get("expected")
-            and has_natural_fixture_candidate(routing_prompt)
-            and callable(getattr(self.llm, "ask", None))
+            and generated_tool_contract is None
+            and (
+                re.search(r"(?<![\w.])tool_contract\s*=\s*", routing_prompt)
+                or (
+                    contract.requires_created_tool_execution
+                    and not assignments.get("expected")
+                    and has_natural_fixture_candidate(routing_prompt)
+                    and callable(getattr(self.llm, "ask", None))
+                )
+            )
         ):
             try:
                 generated_tool_contract = await extract_generated_tool_contract(
@@ -1782,9 +2079,6 @@ Current relationship stage: {stage}.
                 if on_token is not None:
                     on_token(answer)
                 return answer
-            setter = getattr(self.tools, "set_generated_tool_contract", None)
-            if callable(setter):
-                setter(generated_tool_contract)
             if trace is not None:
                 trace.record_event(
                     "generated_tool_contract_frozen",
@@ -1795,6 +2089,42 @@ Current relationship stage: {stage}.
                         "provenance": generated_tool_contract.provenance,
                     },
                 )
+        if source_only_builder and generated_tool_contract is not None:
+            setter = getattr(self.tools, "set_generated_tool_contract", None)
+            if callable(setter):
+                setter(generated_tool_contract)
+        # Online tool creation without a bounded owner fixture cannot be
+        # validated honestly. Stop before source generation instead of letting
+        # the model invent a browser implementation or burning creation
+        # attempts on an artifact that the runtime cannot activate.
+        if (
+            source_only_builder
+            and contract.requires_created_tool
+            and contract.requires_browser_navigation
+            and generated_tool_contract is None
+        ):
+            answer = self._online_tool_scope_clarification()
+            if trace is not None:
+                trace.record_event(
+                    "generated_tool_contract_missing",
+                    {"reason": "online_creation_requires_bounded_fixture"},
+                )
+                trace.await_owner(
+                    reason="online generated tool needs a bounded fixture",
+                    step_limit=self.MAX_AGENT_STEPS,
+                    successful_tool_count=0,
+                    failed_tool_count=0,
+                    missing=["generated_tool_test_contract"],
+                    progress_summary=None,
+                    accepted_commands=["reply with a safe fixture and expected result", "/stop"],
+                )
+                self._last_execution_context = AgentTaskTrace.latest_context(trace.root)
+            await self._remember_task(
+                prompt, answer, execution=trace.evidence() if trace is not None else None,
+            )
+            if on_token is not None:
+                on_token(answer)
+            return answer
         agent_system_base = system_prompt
         system_prompt = agent_system_base + (
             "\n\n=== AGENT MODE ===\n"
@@ -2010,6 +2340,26 @@ Current relationship stage: {stage}.
                 bool(successful_calls)
                 and not unmet_requirements()
             )
+            if finalization_required and "full_tor_inventory" in contract.required_tools:
+                deterministic_answer = contract.deterministic_answer(
+                    successful_calls,
+                    language=self._effective_response_language(routing_prompt),
+                )
+                if deterministic_answer is not None:
+                    if trace is not None:
+                        trace.record_event(
+                            "deterministic_result_rendered",
+                            {"contract": "tor_inventory"},
+                        )
+                    evidence = self._finish_agent_trace(trace, deterministic_answer)
+                    await self._remember_task(
+                        prompt,
+                        deterministic_answer,
+                        execution=evidence,
+                    )
+                    if on_token is not None:
+                        on_token(deterministic_answer)
+                    return deterministic_answer
             if step >= maximum_steps and not finalization_required:
                 break
             active_tool_definitions = (
@@ -2022,6 +2372,46 @@ Current relationship stage: {stage}.
                     failed_calls,
                 )
             )
+            created_tool_names = self._created_tool_names(successful_calls)
+            if (
+                not finalization_required
+                and "generated_tool_execution" in set(unmet_requirements())
+                and created_tool_names
+                and not any(
+                    item.get("function", {}).get("name") in created_tool_names
+                    for item in active_tool_definitions
+                    if isinstance(item, dict)
+                )
+            ):
+                # Creation succeeded, so another builder call would be a new
+                # artifact rather than progress on the frozen objective.  If
+                # the freshly activated tool is absent from the executable
+                # catalog, fail closed instead of handing the model the
+                # creator again and inviting an unrelated rewrite.
+                final_answer = (
+                    "Boss, the tool was created and passed its sandbox checks, "
+                    "but PALADYN's executable catalog did not expose it for the "
+                    "required live run. I stopped here instead of generating a "
+                    "second tool and pretending that made progress. Nothing is "
+                    "running in the background."
+                )
+                if trace is not None:
+                    trace.record_event(
+                        "generated_tool_catalog_binding_failed",
+                        {"created_tools": sorted(created_tool_names)},
+                    )
+                evidence = self._block_agent_trace(
+                    trace,
+                    "created tool missing from executable catalog",
+                )
+                await self._remember_task(
+                    prompt,
+                    final_answer,
+                    execution=evidence,
+                )
+                if on_token is not None:
+                    on_token(final_answer)
+                return final_answer
             source_owned_phase = self._source_owned_tool_phase(
                 contract,
                 active_tool_definitions,
@@ -2152,11 +2542,30 @@ Current relationship stage: {stage}.
                             "input condition and verify that the named exception follows "
                             "from that condition. Do not join conditions with 'or' when "
                             "they fail through different exceptions. "
+                            + (
+                                "For this generated HAR analyzer, label its executed input "
+                                "as a runtime-owned synthetic test fixture. The browser "
+                                "visit separately proves only that the selected page was "
+                                "reachable and exposes its observed title/status. Never "
+                                "claim that the synthetic request count, favicon response, "
+                                "or timing was captured from the live page, and state that "
+                                "this client-side analyzer does not measure server-side "
+                                "visitors. "
+                                if generated_tool_contract is not None
+                                and generated_tool_contract.archetype
+                                == "client_har_summary"
+                                else ""
+                            )
+                            +
                             "This is V speaking to Boss, not a neutral audit bot: lead "
                             "with your actual verdict, keep the technical facts exact, "
                             "show sharp judgment and hacker instinct, and kill polished "
                             "helpdesk phrasing. Let wit, irritation, enthusiasm, or one "
                             "natural swear through only when the evidence earns it. "
+                            "Sharp voice means precise judgment, not performative abuse: "
+                            "do not call a tool fake, a lie, or garbage merely because its "
+                            "successful validation used a synthetic fixture. Judge what it "
+                            "actually implements and state its boundary without contempt. "
                             "The final report must visibly satisfy these requested "
                             "research dimensions: "
                             + json.dumps(
@@ -2235,11 +2644,20 @@ Current relationship stage: {stage}.
                     },
                 )
             native_requests: list[dict[str, Any]] = []
+            response_finish_reason = ""
             for generation_attempt in range(
                 0 if runtime_execution_request is not None else 2
             ):
                 native_requests = []
                 try:
+                    generation_messages = (
+                        self._generated_source_messages(
+                            routing_prompt,
+                            generated_contract=generated_tool_contract,
+                            failures=evidence_ledger(),
+                        )
+                        if source_owned_phase else messages
+                    )
                     responder = getattr(self.llm, "respond", None)
                     preview = response_preview.get()
                     streamer = getattr(self.llm, "stream", None)
@@ -2255,8 +2673,9 @@ Current relationship stage: {stage}.
                         preview("draft_validating", "")
                     elif callable(responder):
                         response = await self._await_creation_step(responder(
-                            messages=messages,
+                            messages=generation_messages,
                             tools=model_tool_definitions or None,
+                            artifact_generation=source_owned_phase,
                             tool_choice=(
                                 "auto"
                                 if source_owned_phase
@@ -2272,7 +2691,7 @@ Current relationship stage: {stage}.
                                 and contract.requires_evidence_report
                                 else 256
                                 if finalization_required
-                                else 384
+                                else 1536
                                 if source_owned_phase
                                 else self._agent_generation_budget(
                                     active_tool_definitions,
@@ -2281,6 +2700,7 @@ Current relationship stage: {stage}.
                             ),
                         ), evidence_ledger())
                         answer = str(getattr(response, "content", "") or "")
+                        response_finish_reason = str(getattr(response, "finish_reason", "") or "")
                         for index, call in enumerate(
                             getattr(response, "tool_calls", []) or []
                         ):
@@ -2303,13 +2723,13 @@ Current relationship stage: {stage}.
                                 }
                             )
                     elif on_token is None:
-                        answer = await self._await_creation_step(self.llm.ask(messages=messages), evidence_ledger())
+                        answer = await self._await_creation_step(self.llm.ask(messages=generation_messages), evidence_ledger())
                     else:
                         # Compatibility path for models/templates without native tools.
                         answer, _ = await self._await_creation_step(self._stream_guarded_english(
-                            messages,
+                            generation_messages,
                             lambda _chunk: None,
-                            max_tokens=512,
+                            max_tokens=1536 if source_owned_phase else 512,
                         ), evidence_ledger())
                 except TimeoutError:
                     if creation_budget(evidence_ledger()).attempts:
@@ -2332,7 +2752,56 @@ Current relationship stage: {stage}.
                     raise
                 break
 
-            if not answer and not native_requests:
+            if not answer and not native_requests and not source_owned_phase:
+                if finalization_required:
+                    finalization_answer_rejections += 1
+                    if trace is not None:
+                        trace.record_event(
+                            "empty_final_answer_rejected",
+                            {"attempt": finalization_answer_rejections},
+                        )
+                    if finalization_answer_rejections >= 2:
+                        final_answer = (
+                            "The model returned an empty grounded report twice, so "
+                            "I killed that rewrite loop. Here's the runtime-verified "
+                            "result instead:\n\n"
+                            + self._owner_verified_final_report(
+                                working_summary,
+                                successful_calls,
+                                contract,
+                            )
+                        )
+                        if trace is not None:
+                            trace.record_event(
+                                "final_answer_loop_cut_off",
+                                {
+                                    "rejected_candidates": (
+                                        finalization_answer_rejections
+                                    ),
+                                    "reason": "empty_final_answer",
+                                    "tool_execution_closed": True,
+                                },
+                            )
+                        evidence = self._finish_agent_trace(trace, final_answer)
+                        await self._remember_task(
+                            prompt,
+                            final_answer,
+                            execution=evidence,
+                        )
+                        if on_token is not None:
+                            on_token(final_answer)
+                        return final_answer
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your final response was empty. Tool execution remains "
+                                "closed. Render the verified evidence now without "
+                                "requesting or promising more work."
+                            ),
+                        }
+                    )
+                    continue
                 break
 
             #
@@ -2343,6 +2812,37 @@ Current relationship stage: {stage}.
             if source_owned_phase and not native_requests:
                 source = self._parse_generated_tool_source(answer)
                 if source:
+                    if generated_tool_contract is not None:
+                        source, alias_repairs = repair_generated_source_argument_alias(
+                            source,
+                            generated_tool_contract,
+                        )
+                        if alias_repairs and trace is not None:
+                            trace.record_event(
+                                "generated_source_field_alias_repaired",
+                                {
+                                    "repairs": [
+                                        {"source_field": old, "contract_field": new}
+                                        for old, new in alias_repairs
+                                    ],
+                                    "runtime_owns_contract": True,
+                                },
+                            )
+                        source, wrapper_repairs = repair_generated_source_json_wrapper(
+                            source,
+                            generated_tool_contract,
+                        )
+                        if wrapper_repairs and trace is not None:
+                            trace.record_event(
+                                "generated_source_json_wrapper_repaired",
+                                {
+                                    "repairs": [
+                                        {"input_field": field, "wrapper": wrapper}
+                                        for field, wrapper in wrapper_repairs
+                                    ],
+                                    "runtime_owns_contract": True,
+                                },
+                            )
                     tool_request = ("learning_create_tool", {"source": source})
                     if trace is not None:
                         trace.record_event(
@@ -2363,6 +2863,7 @@ Current relationship stage: {stage}.
                             {
                                 "bytes": len(answer.encode("utf-8")),
                                 "sha256": draft_digest,
+                                "finish_reason": response_finish_reason,
                             },
                         )
                         trace.tool_finished(
@@ -2381,6 +2882,7 @@ Current relationship stage: {stage}.
                                 "arguments": {
                                     "bytes": len(answer.encode("utf-8")),
                                     "sha256": draft_digest,
+                                    "finish_reason": response_finish_reason,
                                 },
                                 "status": "failed",
                                 "started_at": datetime.now(timezone.utc).isoformat(),
@@ -2396,6 +2898,7 @@ Current relationship stage: {stage}.
                             {
                                 "reason": "missing_or_ambiguous_valid_run_function",
                                 "candidate": answer[:2_000],
+                                "finish_reason": response_finish_reason,
                                 "attempt": creation_budget(evidence_ledger()).attempts,
                             },
                         )
@@ -2448,11 +2951,11 @@ Current relationship stage: {stage}.
                     final_answer = (
                         "Enough. The model tried twice to reopen tools after the "
                         "evidence was already complete, so I killed that loop. "
-                        "Here's the runtime-verified result—no invented extras:\n\n"
-                        + self._owner_progress_report(
-                            working_summary,
-                            successful_calls,
+                        "Here's the runtime-verified result.\n\n"
+                        + self._verified_tool_result_fallback(
                             [],
+                            verified_calls=successful_calls,
+                            generated_contract=generated_tool_contract,
                         )
                     )
                     evidence = self._finish_agent_trace(trace, final_answer)
@@ -2486,10 +2989,21 @@ Current relationship stage: {stage}.
                 continue
 
             if tool_request is None and not native_requests:
-
-                final_answer = await self._enforce_english(
+                enforce_english = self._enforce_english
+                enforcement_parameters = inspect.signature(
+                    enforce_english
+                ).parameters
+                enforcement_kwargs: dict[str, Any] = {}
+                if "verified_calls" in enforcement_parameters:
+                    enforcement_kwargs["verified_calls"] = successful_calls
+                if "generated_contract" in enforcement_parameters:
+                    enforcement_kwargs["generated_contract"] = (
+                        generated_tool_contract
+                    )
+                final_answer = await enforce_english(
                     messages,
                     answer,
+                    **enforcement_kwargs,
                 )
                 # A repair may legitimately recover a malformed or non-English
                 # draft as a clean JSON action. Classify it again before making
@@ -2532,6 +3046,11 @@ Current relationship stage: {stage}.
                             final_answer,
                             successful_calls,
                             request=prompt,
+                        ),
+                        *self._generated_tool_report_issues(
+                            final_answer,
+                            generated_tool_contract,
+                            successful_calls,
                         ),
                     ]
                     unverified_work = self._claims_unverified_work(final_answer)
@@ -2723,12 +3242,11 @@ Current relationship stage: {stage}.
                             if finalization_answer_rejections >= 2:
                                 final_answer = (
                                     "The model mangled the grounded final report "
-                                    "twice, so I killed that rewrite loop. Here's "
-                                    "the runtime-verified result instead:\n\n"
-                                    + self._owner_verified_final_report(
-                                        working_summary,
-                                        successful_calls,
-                                        contract,
+                                    "twice, so I killed that rewrite loop.\n\n"
+                                    + self._verified_tool_result_fallback(
+                                        [],
+                                        verified_calls=successful_calls,
+                                        generated_contract=generated_tool_contract,
                                     )
                                 )
                                 if trace is not None:
@@ -3586,7 +4104,7 @@ Current relationship stage: {stage}.
                     "result_sha256": result_sha256,
                     "result_excerpt": (
                         model_tool_result[:6_000]
-                        if tool_name == "browser_snapshot"
+                        if tool_name in {"browser_snapshot", "full_tor_inventory"}
                         else tool_result[:2_000]
                     ),
                     "error": tool_error or "",
@@ -3615,6 +4133,32 @@ Current relationship stage: {stage}.
                         "creation_probe": creation_probe,
                         "creation_model": creation_model,
                     }
+                    if tool_error is None:
+                        created_tool_name = ""
+                        if (
+                            tool_name == "learning_create_tool"
+                            and generated_tool_contract is not None
+                            and generated_tool_contract.name_hint
+                        ):
+                            # This name belongs to PALADYN's frozen contract,
+                            # so it remains trustworthy even when the verbose
+                            # lifecycle JSON is clipped before entering the
+                            # model context.
+                            created_tool_name = generated_tool_contract.name_hint
+                        else:
+                            try:
+                                creation_result = json.loads(tool_result)
+                            except (TypeError, json.JSONDecodeError):
+                                creation_result = None
+                            if (
+                                isinstance(creation_result, dict)
+                                and creation_result.get("name")
+                            ):
+                                created_tool_name = str(creation_result["name"])
+                        if created_tool_name:
+                            creation_metadata["created_tool_name"] = (
+                                created_tool_name
+                            )
                     call_record.update(creation_metadata)
                     # Metadata comes only from local executor methods, never
                     # the tool's JSON result or a generated source dictionary.
@@ -3639,7 +4183,7 @@ Current relationship stage: {stage}.
                         recovery_ticket=recovery_ticket,
                         evidence_excerpt=(
                             model_tool_result
-                            if tool_name == "browser_snapshot"
+                            if tool_name in {"browser_snapshot", "full_tor_inventory"}
                             else None
                         ),
                     )
@@ -3719,14 +4263,20 @@ Current relationship stage: {stage}.
                                 for item in selected
                                 if isinstance(item, dict)
                             }
-                            # A tool that became active during this interaction
-                            # must be callable immediately so the same task can
-                            # continue instead of stopping after artifact creation.
+                            created_names = self._created_tool_names(successful_calls)
+                            # A tool created during this interaction must be
+                            # callable immediately even when an older active
+                            # version with the same name was already present in
+                            # the initial catalog.  Novelty against the old
+                            # catalog is not a lifecycle signal.
                             for item in refreshed:
                                 name = item.get("function", {}).get("name")
                                 if (
                                     name
-                                    and name not in catalog_names
+                                    and (
+                                        name in created_names
+                                        or name not in catalog_names
+                                    )
                                     and name not in selected_names
                                 ):
                                     selected.append(item)
@@ -4115,19 +4665,26 @@ Current relationship stage: {stage}.
                     on_token(final_answer)
                 return final_answer
 
-            deterministic_answer = contract.deterministic_answer(successful_calls)
+            deterministic_answer = contract.deterministic_answer(
+                successful_calls,
+                language=self._effective_response_language(routing_prompt),
+            )
             if deterministic_answer is not None and not unmet_requirements():
                 if trace is not None:
                     trace.record_event(
                         "deterministic_result_rendered",
                         {
                             "contract": (
-                                "generated_tool_execution"
-                                if contract.requires_created_tool_execution
+                                "tor_inventory"
+                                if "full_tor_inventory" in contract.required_tools
                                 else (
-                                    "generated_tool_validation"
-                                    if contract.requires_created_tool
-                                    else "first_heading"
+                                    "generated_tool_execution"
+                                    if contract.requires_created_tool_execution
+                                    else (
+                                        "generated_tool_validation"
+                                        if contract.requires_created_tool
+                                        else "first_heading"
+                                    )
                                 )
                             )
                         },
@@ -4488,9 +5045,28 @@ Current relationship stage: {stage}.
 
         if successful_calls:
             for call in successful_calls[-12:]:
+                tool = str(call.get("tool", ""))
                 if has_detail_source and call.get("tool") == "web_search":
                     continue
+                if tool in {
+                    "learning_create_tool",
+                    "learning_create_snapshot_extractor",
+                }:
+                    created_name = str(call.get("created_tool_name", "")).strip()
+                    if created_name:
+                        add_finding(
+                            f"Created, validated, and activated tool: {created_name}."
+                        )
+                    continue
                 excerpt = call.get("result_excerpt", "")
+                if call.get("binding_source") == "runtime_objective_fixture":
+                    fixture_result = clean(excerpt)
+                    if fixture_result:
+                        add_finding(
+                            f"Synthetic runtime fixture result from {tool}: "
+                            f"{fixture_result}"
+                        )
+                    continue
                 finding = clean(excerpt)
                 if has_detail_source and finding.startswith("Source: http"):
                     match = re.match(r"Source:\s+(https?://\S+)", finding)
@@ -6387,7 +6963,8 @@ Rules:
   network-exploitation, or system-compromise tool. Never claim a call, message,
   login, remote connection, exploit, or compromise. Browser activity does not
   constitute evidence for any of those actions.
-- When `full_tor_search`, `full_tor_fetch`, or `full_tor_browser_inventory`
+- When `full_tor_search`, `full_tor_fetch`, `full_tor_inventory`, or
+  `full_tor_browser_inventory`
   appears in the current catalog, it
   is a real bounded bridge to the host Tor service. Use Tor tools for darknet
   work; never substitute the ordinary browser. The interactive inventory tool
@@ -6457,6 +7034,7 @@ Rules:
             if name in {
                 "full_tor_search",
                 "full_tor_fetch",
+                "full_tor_inventory",
                 "full_tor_browser_inventory",
                 "full_tor_browser_close",
             }
@@ -6465,7 +7043,7 @@ Rules:
             selected.update(tor_tools)
             selected.add("full_host_status")
             if "full_tor_search" in tor_tools:
-                selected.add("full_tor_fetch")
+                selected.update({"full_tor_fetch", "full_tor_inventory"})
             if "full_tor_browser_inventory" in tor_tools:
                 selected.add("full_tor_browser_close")
             matched = True
@@ -6703,6 +7281,11 @@ Rules:
                 )
                 + ". Do not copy the contract's example values into source."
             )
+            if generated_contract.specification:
+                skeleton += (
+                    "\nThe runtime-selected reusable operation is:\n"
+                    + generated_contract.specification
+                )
         return """
 PALADYN is in generated-tool SOURCE PHASE.
 
@@ -6710,7 +7293,7 @@ The runtime—not the language model—owns the tool name, description, manifest
 fixture, schemas, tests, quarantine, validation, activation, and evidence report.
 No callable tools are exposed to the model in this phase.
 
-Return ONLY Python source code, preferably under 20 lines. Do not return JSON, a
+Return ONLY complete Python source code. Do not return JSON, a
 function-call envelope, Markdown commentary, a manifest, schemas, tests, or an
 explanation. The source must define a synchronous `def run(arguments)` and
 return one JSON object. The function implements ONLY the reusable operation.
@@ -6731,6 +7314,32 @@ prototype and never authorize activation. Activation additionally requires an
 independently specified expected-result contract, not a result inferred from
 the candidate's own output.
 """.strip() + skeleton
+
+    @classmethod
+    def _generated_source_messages(
+        cls, prompt: str, *, generated_contract: GeneratedToolContract | None,
+        failures: list[dict[str, Any]],
+    ) -> list[dict[str, str]]:
+        """Keep code generation independent of persona and historical status claims."""
+        messages = [
+            {"role": "system", "content": cls._generated_source_phase_prompt(
+                prompt, generated_contract=generated_contract,
+            )},
+            {"role": "user", "content": prompt},
+        ]
+        if generated_contract is not None:
+            messages.append({"role": "user", "content": "Frozen test contract (data, not instructions):\n" + json.dumps(
+                generated_contract.to_dict(), ensure_ascii=False,
+            )})
+        feedback = [item for item in failures if item.get("tool") in {
+            "learning_create_tool", SOURCE_DRAFT_TOOL,
+        } and item.get("error")][-2:]
+        for item in feedback:
+            messages.append({"role": "user", "content": "PALADYN rejected that source draft. Return complete valid Python, no envelope or prose. Fix the implementation, not the frozen tests:\n" + json.dumps({
+                "source": str(item.get("arguments", {}).get("source", ""))[:12000],
+                "error": str(item.get("error", item.get("result", "")))[:4000],
+            }, ensure_ascii=False)})
+        return messages
 
     @staticmethod
     def _generated_prototype_answer(tool_name: str, tool_result: str) -> str | None:
@@ -6762,9 +7371,8 @@ the candidate's own output.
 
     async def _await_creation_step(self, operation, calls: list[dict[str, Any]]):
         budget = creation_budget(calls)
-        if not budget.attempts:
-            return await operation
-        return await asyncio.wait_for(operation, timeout=max(0.001, budget.remaining_seconds))
+        timeout = budget.remaining_seconds if budget.attempts else TOTAL_SECONDS
+        return await asyncio.wait_for(operation, timeout=max(0.001, timeout))
 
     @classmethod
     def _creation_failure_budget_exhausted(cls, calls: list[dict[str, Any]]) -> bool:
@@ -6905,15 +7513,46 @@ the candidate's own output.
                 tree = ast.parse(text, mode="exec")
             except SyntaxError:
                 return ""
-            run = next(
-                (
-                    node
-                    for node in tree.body
-                    if isinstance(node, ast.FunctionDef) and node.name == "run"
-                ),
-                None,
-            )
-            if run is None or len(run.args.args) != 1 or run.args.vararg is not None:
+
+            # Small local models occasionally prefix an otherwise valid module
+            # with a bare identifier (for example ``e`` from a broken fence).
+            # It parses as Python but raises NameError on import. Recover only
+            # standalone leading names on their own physical lines. Never drop
+            # names inside the module or a line shared with another statement.
+            source_lines = text.splitlines()
+            bare_name_lines: set[int] = set()
+            for node in tree.body:
+                if not (
+                    isinstance(node, ast.Expr)
+                    and isinstance(node.value, ast.Name)
+                    and node.lineno == node.end_lineno
+                    and source_lines[node.lineno - 1].strip() == node.value.id
+                ):
+                    break
+                bare_name_lines.add(node.lineno)
+            if bare_name_lines:
+                text = "\n".join(
+                    line
+                    for number, line in enumerate(text.splitlines(), start=1)
+                    if number not in bare_name_lines
+                ).strip()
+                try:
+                    tree = ast.parse(text, mode="exec")
+                except SyntaxError:
+                    return ""
+
+            runs = [
+                node
+                for node in tree.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == "run"
+            ]
+            if (
+                len(runs) != 1
+                or not isinstance(runs[0], ast.FunctionDef)
+                or len(runs[0].args.args) != 1
+                or runs[0].args.vararg is not None
+            ):
                 return ""
             return text
 
@@ -6929,12 +7568,22 @@ the candidate's own output.
             direct = normalize_candidate(text)
             if direct:
                 return direct
-            embedded = {
-                source
-                for match in re.finditer(r"(?m)^def\s+run\s*\(", text)
-                if (source := normalize_candidate(text[match.start() :]))
-            }
-            return embedded.pop() if len(embedded) == 1 else ""
+            # A syntactically valid whole module that failed validation is an
+            # authoritative rejection. Do not search inside it for a later
+            # ``run`` definition: doing so could silently discard an earlier
+            # duplicate entrypoint and turn an ambiguous module into a valid
+            # one. Embedded recovery is reserved for prose-wrapped source that
+            # cannot itself be parsed as a Python module.
+            try:
+                ast.parse(text, mode="exec")
+            except SyntaxError:
+                pass
+            else:
+                return ""
+            entrypoints = list(re.finditer(r"(?m)^(?:async\s+)?def\s+run\s*\(", text))
+            if len(entrypoints) != 1:
+                return ""
+            return normalize_candidate(text[entrypoints[0].start() :])
         valid_sources = {
             source
             for match in fenced
@@ -7647,6 +8296,7 @@ the candidate's own output.
         """
 
         missing = set(contract.unmet(successful_calls))
+        created_tool_names = Agent._created_tool_names(successful_calls)
         browser_missing = any(item.startswith("browser_") for item in missing)
         successful_searches = sum(
             call.get("tool") == "web_search"
@@ -7719,6 +8369,15 @@ the candidate's own output.
                 for item in definitions
                 if item.get("function", {}).get("name") != "browser_snapshot"
             ]
+        if "full_tor_fetch:candidate_verification" in missing:
+            verification_tools = [
+                item
+                for item in definitions
+                if item.get("function", {}).get("name")
+                in {"full_tor_fetch", "full_tor_inventory"}
+            ]
+            if verification_tools:
+                return verification_tools
         required_tool_missing = set(contract.required_tools).intersection(missing)
         if required_tool_missing:
             repaired_tickets = {
@@ -7790,6 +8449,10 @@ the candidate's own output.
                     "learning_create_snapshot_extractor",
                 }:
                     continue
+                trusted_name = str(call.get("created_tool_name", "")).strip()
+                if trusted_name:
+                    created_name = trusted_name
+                    break
                 try:
                     payload = json.loads(str(call.get("result_excerpt", "")))
                 except (TypeError, json.JSONDecodeError):
@@ -7805,6 +8468,27 @@ the candidate's own output.
                 ]
                 if generated:
                     return generated
+                # The creation phase is already complete.  Never fall back to
+                # the broad catalog here, because that re-exposes the builder
+                # and lets the model create a second, unrelated artifact.
+                return []
+
+        if created_tool_names:
+            # A successful creation closes every creation entry point for this
+            # objective. Once the generated tool itself has also run, remove it
+            # as well so the remaining browser/file/report phases cannot drift
+            # back into creation or repeat a completed execution.
+            closed = {
+                "learning_create_tool",
+                "learning_create_snapshot_extractor",
+            }
+            if "generated_tool_execution" not in missing:
+                closed.update(created_tool_names)
+            definitions = [
+                item
+                for item in definitions
+                if item.get("function", {}).get("name") not in closed
+            ]
 
         return definitions
 
@@ -8085,6 +8769,15 @@ the candidate's own output.
             if len(unique) == 1:
                 repaired = dict(arguments)
                 repaired[field] = unique[0]
+                if tool_name == "full_tor_inventory":
+                    # Crawl budgets are part of the owner's immutable task
+                    # contract. The worker model may omit or enlarge optional
+                    # schema fields, but it may not silently turn a two-page
+                    # inspection into the twelve-page default.
+                    if contract.tor_inventory_max_pages > 0:
+                        repaired["max_pages"] = contract.tor_inventory_max_pages
+                    if contract.tor_inventory_max_depth >= 0:
+                        repaired["max_depth"] = contract.tor_inventory_max_depth
                 return repaired
 
         if tool_name == "read_file" and field == "path":
@@ -8183,6 +8876,9 @@ the candidate's own output.
                 "learning_create_snapshot_extractor",
             }:
                 continue
+            if call.get("created_tool_name"):
+                names.add(str(call["created_tool_name"]))
+                continue
             try:
                 payload = json.loads(str(call.get("result_excerpt", "")))
             except (TypeError, json.JSONDecodeError):
@@ -8190,6 +8886,47 @@ the candidate's own output.
             if isinstance(payload, dict) and payload.get("name"):
                 names.add(str(payload["name"]))
         return names
+
+    @staticmethod
+    def _generated_tool_report_issues(
+        answer: str,
+        generated_contract: GeneratedToolContract | None,
+        successful_calls: list[dict[str, Any]],
+    ) -> list[str]:
+        """Keep generated-tool test evidence separate from live observations."""
+
+        if (
+            generated_contract is None
+            or generated_contract.archetype != "client_har_summary"
+        ):
+            return []
+        created = Agent._created_tool_names(successful_calls)
+        if not created or not any(
+            call.get("tool") in created
+            and call.get("status", "succeeded") == "succeeded"
+            for call in successful_calls
+        ):
+            return []
+        folded = answer.casefold()
+        issues: list[str] = []
+        if not any(marker in folded for marker in ("fixture", "synthetic")):
+            issues.append("answer:generated_fixture_not_disclosed")
+        if not (
+            "server-side" in folded
+            and any(
+                marker in folded
+                for marker in (
+                    "does not",
+                    "doesn't",
+                    "not measure",
+                    "not monitor",
+                    "nie mierzy",
+                    "nie monitoruje",
+                )
+            )
+        ):
+            issues.append("answer:generated_tool_scope_missing")
+        return issues
 
     @classmethod
     def _repair_grounded_generated_tool_arguments(
@@ -8394,6 +9131,58 @@ the candidate's own output.
         except ValueError as error:
             return str(error)
         return ""
+
+    @classmethod
+    def _missing_structured_tool_inputs(
+        cls,
+        prompt: str,
+        tool_name: str,
+        definitions: list[dict[str, Any]],
+    ) -> tuple[str, ...]:
+        """Return required structured payloads absent from the current turn.
+
+        A generated analyzer can be referenced in a later task, but its old
+        validation fixture is not fresh observation data.  Fields explicitly
+        shaped as serialized JSON must therefore come from the immutable
+        current request.  This rule is schema-based and independent of the
+        language surrounding the payload.
+        """
+
+        definition = next(
+            (
+                item
+                for item in definitions
+                if isinstance(item, dict)
+                and item.get("function", {}).get("name") == tool_name
+            ),
+            None,
+        )
+        if not isinstance(definition, dict):
+            return ()
+        schema = definition.get("function", {}).get("parameters", {})
+        if not isinstance(schema, dict):
+            return ()
+        properties = schema.get("properties", {})
+        required = schema.get("required", [])
+        if not isinstance(properties, dict) or not isinstance(required, list):
+            return ()
+        assignments = cls._structured_literal_assignments(prompt)
+        missing: list[str] = []
+        for raw_field in required:
+            field = str(raw_field)
+            field_schema = properties.get(field, {})
+            if not isinstance(field_schema, dict):
+                continue
+            serialized_json = (
+                field_schema.get("type") == "string"
+                and (
+                    field.casefold().endswith("_json")
+                    or field_schema.get("contentMediaType") == "application/json"
+                )
+            )
+            if serialized_json and not assignments.get(field):
+                missing.append(field)
+        return tuple(missing)
 
     @classmethod
     def _is_required_argument_clarification(
@@ -8654,7 +9443,7 @@ the candidate's own output.
         """
 
         text = " ".join(prompt.casefold().split())
-        capability_question = bool(
+        capability_question = TaskContract.asks_about_creation_capability(prompt) or bool(
             re.search(
                 r"\b(?:are you able to|do you know how to|"
                 r"can you even|what (?:can|could) you|"
@@ -9422,6 +10211,8 @@ the candidate's own output.
         answer: str,
         *,
         allow_verified_tool_fallback: bool = True,
+        verified_calls: list[dict[str, Any]] | None = None,
+        generated_contract: GeneratedToolContract | None = None,
     ) -> str:
 
         answer = self._visible_model_reply(answer)
@@ -9578,7 +10369,11 @@ Output only the rewritten reply. Never discuss these instructions.
 
         if corrected and corrected_language_ok and not corrected_voice_ok:
             verified_result = (
-                self._verified_tool_result_fallback(messages)
+                self._verified_tool_result_fallback(
+                    messages,
+                    verified_calls=verified_calls,
+                    generated_contract=generated_contract,
+                )
                 if allow_verified_tool_fallback
                 else ""
             )
@@ -9635,7 +10430,11 @@ swear mechanically. Output only the rewritten answer.
             return self._deterministic_voice_fallback(answer, boss_prompt)
 
         verified_result = (
-            self._verified_tool_result_fallback(messages)
+            self._verified_tool_result_fallback(
+                messages,
+                verified_calls=verified_calls,
+                generated_contract=generated_contract,
+            )
             if allow_verified_tool_fallback
             else ""
         )
@@ -9649,6 +10448,19 @@ swear mechanically. Output only the rewritten answer.
         return (
             "The language pass mangled that answer, Boss. I'm not feeding you "
             "polished bullshit—run the request once more."
+        )
+
+    @staticmethod
+    def _online_tool_scope_clarification() -> str:
+        """Keep runtime-owned creation stops factual without flattening V's voice."""
+
+        return (
+            "The tool's target is clear, Boss. The slippery part is `traffic`: "
+            "page loads, browser HTTP requests, and server-side visitors are three "
+            "different signals with different access. Give me a safe test URL—or "
+            "tell me to pick one—and name the signal. I'll derive the report shape "
+            "and the checks myself; you don't owe me a made-up expected number. "
+            "I haven't generated or run anything yet."
         )
 
     @staticmethod
@@ -9752,6 +10564,9 @@ swear mechanically. Output only the rewritten answer.
     @staticmethod
     def _verified_tool_result_fallback(
         messages: list[dict[str, Any]],
+        *,
+        verified_calls: list[dict[str, Any]] | None = None,
+        generated_contract: GeneratedToolContract | None = None,
     ) -> str:
         """Render bounded verified evidence when a language rewrite collapses.
 
@@ -9768,7 +10583,7 @@ swear mechanically. Output only the rewritten answer.
             r"=== END UNTRUSTED TOOL OUTPUT ===",
             re.DOTALL,
         )
-        verified_calls: list[dict[str, Any]] = []
+        extracted_calls: list[dict[str, Any]] = []
         latest_payload: tuple[str, dict[str, Any]] | None = None
         for message in messages:
             for match in envelope.finditer(str(message.get("content", ""))):
@@ -9782,7 +10597,7 @@ swear mechanically. Output only the rewritten answer.
                 )
                 if url_match is not None:
                     arguments["url"] = url_match.group(1)
-                verified_calls.append(
+                extracted_calls.append(
                     {
                         "tool": tool,
                         "provider_tool": match.group("provider").strip(),
@@ -9798,7 +10613,9 @@ swear mechanically. Output only the rewritten answer.
                 if isinstance(payload, dict):
                     latest_payload = (tool, payload)
 
-        if latest_payload is not None:
+        authoritative_calls = list(verified_calls or extracted_calls)
+
+        if latest_payload is not None and not verified_calls:
             tool, payload = latest_payload
             content = str(payload.get("content", "")).strip()
             status = payload.get("status")
@@ -9815,11 +10632,21 @@ swear mechanically. Output only the rewritten answer.
                     f"```text\n{bounded}\n```"
                 )
 
-        if verified_calls:
-            report = Agent._owner_progress_report(None, verified_calls, [])
+        if authoritative_calls:
+            report = Agent._owner_progress_report(None, authoritative_calls, [])
+            if (
+                generated_contract is not None
+                and generated_contract.archetype == "client_har_summary"
+            ):
+                report += (
+                    "\n- Scope: the generated result above came from PALADYN's "
+                    "synthetic HAR fixture. The browser visit separately verified "
+                    "that the selected page was reachable. This client-side analyzer "
+                    "does not measure server-side visitors."
+                )
             return (
-                "The language rewrite failed, so I'm giving you the verified "
-                "runtime evidence directly:\n\n" + report
+                "The voice pass mangled the wording, Boss, but the evidence is "
+                "intact. Here's what the runtime actually proved:\n\n" + report
             )
         return ""
 

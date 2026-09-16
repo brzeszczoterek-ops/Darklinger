@@ -63,6 +63,28 @@ def test_task_contract_detects_polish_local_tool_and_required_use() -> None:
     assert contract.unmet(calls) == []
 
 
+def test_task_contract_tracks_created_tool_when_lifecycle_receipt_is_clipped() -> None:
+    contract = TaskContract(
+        requires_created_tool=True,
+        requires_created_tool_execution=True,
+    )
+    calls = [
+        {
+            "tool": "learning_create_tool",
+            "status": "succeeded",
+            "created_tool_name": "har_traffic_summary",
+            "result_excerpt": '{"activation_count":1,"artifact_id":"clipped',
+        },
+        {
+            "tool": "har_traffic_summary",
+            "status": "succeeded",
+            "result_excerpt": '{"requests_count":2}',
+        },
+    ]
+
+    assert contract.unmet(calls) == []
+
+
 def test_created_tool_results_request_requires_real_execution() -> None:
     contract = TaskContract.from_prompt(
         "Stwórz takie narzędzie i pokaż mi rezultaty."
@@ -70,6 +92,39 @@ def test_created_tool_results_request_requires_real_execution() -> None:
 
     assert contract.requires_created_tool is True
     assert contract.requires_created_tool_execution is True
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Powiedz mi, czy potrafiłabyś stworzyć narzędzie do rejestrowania ruchu?",
+        "V, czy potrafisz tworzyć własne narzędzia?",
+        "Are you able to create a page monitoring tool?",
+        "Do you know how to build an agent skill?",
+    ],
+)
+def test_creation_capability_questions_do_not_create_artifacts(prompt: str) -> None:
+    contract = TaskContract.from_prompt(prompt)
+
+    assert TaskContract.asks_about_creation_capability(prompt) is True
+    assert contract.requires_created_tool is False
+    assert contract.requires_created_skill is False
+    assert contract.requires_created_tool_execution is False
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Stwórz narzędzie do rejestrowania ruchu.",
+        "Czy możesz stworzyć narzędzie do rejestrowania ruchu?",
+        "Could you create a page monitoring tool?",
+        "Build an agent skill now.",
+    ],
+)
+def test_explicit_creation_requests_remain_actionable(prompt: str) -> None:
+    contract = TaskContract.from_prompt(prompt)
+
+    assert contract.requires_created_tool or contract.requires_created_skill
 
 
 def test_semantic_created_artifact_results_require_execution_in_any_language() -> None:
@@ -154,6 +209,56 @@ def test_behaviorally_tested_tool_is_not_reported_as_semantically_proven() -> No
     assert "no independent semantic oracle" in answer
     assert "not yet run on a real task input" in answer
     assert "validated" not in answer
+
+
+def test_tor_inventory_deterministic_answer_reports_only_observed_facts() -> None:
+    payload = {
+        "ok": True,
+        "seed_url": "http://" + "a" * 56 + ".onion/",
+        "coverage": "partial",
+        "max_pages": 2,
+        "max_depth": 2,
+        "pages_observed": 2,
+        "pages_succeeded": 2,
+        "pages_failed": 0,
+        "budget_exhausted": True,
+        "timed_out": False,
+        "javascript_enabled": False,
+        "forms_submitted": False,
+        "credentials_used": False,
+        "redirects_followed": False,
+        "records": [
+            {
+                "url": "http://" + "a" * 56 + ".onion/",
+                "title": "Observed seed",
+                "status": 200,
+            },
+            {
+                "url": "http://" + "a" * 56 + ".onion/about",
+                "title": "About",
+                "status": 200,
+            },
+        ],
+    }
+    contract = TaskContract(required_tools=("full_tor_inventory",))
+
+    answer = contract.deterministic_answer(
+        [
+            {
+                "tool": "full_tor_inventory",
+                "status": "succeeded",
+                "result_excerpt": json.dumps(payload),
+            }
+        ],
+        language="Polish",
+    )
+
+    assert answer is not None
+    assert "zaobserwowano 2 stron" in answer
+    assert "Przerwano zgodnie z ustawionym limitem" in answer
+    assert "Observed seed — HTTP 200" in answer
+    assert "Nie dowodzi bezpieczeństwa serwisu" in answer
+    assert "bezpieczny" not in answer.casefold()
 
 
 def test_task_contract_accepts_deterministic_snapshot_tool_builder() -> None:
@@ -354,6 +459,29 @@ def test_interactive_trace_recovers_latest_runtime_context(tmp_path: Path) -> No
     assert context["status"] == "blocked"
     assert context["requirements"]["requires_distinct_detail_page"] is True
     assert context["tool_calls"][0]["error"].endswith("DNS resolution failed")
+
+
+def test_trace_recovers_latest_created_tool_across_later_turns(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "interactive"
+    creation = AgentTaskTrace(root, "Create a traffic analyzer")
+    sequence = creation.tool_started("learning_create_tool", {"source": "..."})
+    creation.tool_calls[sequence - 1]["created_tool_name"] = (
+        "har_traffic_summary"
+    )
+    creation.tool_finished(sequence, '{"name":"har_traffic_summary"}')
+    creation.complete("Created the tool.")
+
+    later = AgentTaskTrace(root, "Discuss the result")
+    later.complete("Done.")
+
+    created = AgentTaskTrace.latest_created_tool(root)
+
+    assert created == {
+        "name": "har_traffic_summary",
+        "task_id": creation.task_id,
+    }
 
 
 def test_runtime_review_is_grounded_in_checkpoint_events(tmp_path: Path) -> None:
@@ -2026,6 +2154,80 @@ def test_semantic_intent_preserves_explicit_turn_language_without_tool_action() 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("prompt", "archetype_evidence", "delegation_evidence"),
+    [
+        (
+            "Crea una herramienta para vigilar el tráfico web. "
+            "Elige tú misma cualquier sitio seguro para probarla.",
+            "herramienta para vigilar el tráfico web",
+            "Elige tú misma cualquier sitio seguro",
+        ),
+        (
+            "ウェブ通信を監視するツールを作成してください。"
+            "安全なテストサイトは自分で選んでください。",
+            "ウェブ通信を監視するツール",
+            "安全なテストサイトは自分で選んでください",
+        ),
+    ],
+)
+async def test_semantic_router_grounds_test_delegation_in_any_language(
+    prompt: str,
+    archetype_evidence: str,
+    delegation_evidence: str,
+) -> None:
+    class LLMStub:
+        async def ask(self, **kwargs) -> str:
+            return json.dumps(
+                {
+                    "message_clear": True,
+                    "action_requested": True,
+                    "capabilities": ["learning_tool"],
+                    "requires_report": True,
+                    "execute_created_artifact": True,
+                    "generated_tool_archetype": "client_web_traffic_monitor",
+                    "generated_tool_archetype_evidence": archetype_evidence,
+                    "delegates_test_target": True,
+                    "delegates_test_target_evidence": delegation_evidence,
+                },
+                ensure_ascii=False,
+            )
+
+    intent = await MultilingualIntentRouter(LLMStub()).classify(prompt)
+
+    assert intent is not None
+    assert intent.generated_tool_archetype == "client_web_traffic_monitor"
+    assert intent.delegates_test_target is True
+
+
+@pytest.mark.asyncio
+async def test_semantic_router_rejects_ungrounded_test_delegation() -> None:
+    class LLMStub:
+        async def ask(self, **kwargs) -> str:
+            return json.dumps(
+                {
+                    "message_clear": True,
+                    "action_requested": True,
+                    "capabilities": ["learning_tool"],
+                    "requires_report": True,
+                    "execute_created_artifact": True,
+                    "generated_tool_archetype": "client_web_traffic_monitor",
+                    "generated_tool_archetype_evidence": "not in the message",
+                    "delegates_test_target": True,
+                    "delegates_test_target_evidence": "also absent",
+                }
+            )
+
+    intent = await MultilingualIntentRouter(LLMStub()).classify(
+        "Please create and test a tool."
+    )
+
+    assert intent is not None
+    assert intent.generated_tool_archetype == "none"
+    assert intent.delegates_test_target is False
+
+
+@pytest.mark.asyncio
 async def test_multilingual_intent_router_classifies_hungarian_action() -> None:
     class LLMStub:
         def __init__(self) -> None:
@@ -2059,6 +2261,47 @@ async def test_multilingual_intent_router_classifies_hungarian_action() -> None:
     assert llm.kwargs["temperature"] == 0.0
     assert llm.kwargs["max_tokens"] == 384
     assert llm.kwargs["response_format"]["type"] == "json_schema"
+
+
+@pytest.mark.asyncio
+async def test_catalog_misclassification_retries_online_creation_followup() -> None:
+    prompt = (
+        "Słuchaj, może jednak mimo wszystko spróbuj, tylko wiesz co? "
+        "Zanim zaczniesz, może poszukaj informacji na temat takich narzędzi "
+        "w internecie i dopiero wtedy zacznij je tworzyć."
+    )
+
+    class LLMStub:
+        calls = 0
+
+        async def ask(self, **kwargs) -> str:
+            self.calls += 1
+            return json.dumps({
+                "action_requested": True,
+                "references_previous": True,
+                "capabilities": (["tool_catalog"] if self.calls == 1
+                                 else ["browser", "learning_tool"]),
+                "requires_report": True,
+                "web_query": "" if self.calls == 1 else "informacji na temat takich narzędzi",
+            })
+
+    llm = LLMStub()
+    intent = await MultilingualIntentRouter(llm).classify(prompt)
+    assert llm.calls == 2
+    assert intent is not None
+    assert set(intent.capabilities) == {"browser", "learning_tool"}
+    assert intent.references_previous
+
+
+@pytest.mark.parametrize("capability", ["tool_catalog", "tool_self_test"])
+def test_catalog_shortcut_cannot_satisfy_explicit_external_work(capability: str) -> None:
+    intent = SemanticIntent(action_requested=True, capabilities=(capability,))
+    assert not MultilingualIntentRouter._usable(
+        intent, "Search online for CSV tools and then build a tool."
+    )
+    assert MultilingualIntentRouter._usable(
+        intent, "Review available tool descriptions."
+    )
 
 
 @pytest.mark.asyncio

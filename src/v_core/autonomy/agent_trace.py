@@ -442,13 +442,16 @@ class AgentTaskTrace:
                 continue
             calls = []
             for call in payload.get("tool_calls", [])[-6:]:
-                calls.append(
-                    {
-                        "tool": str(call.get("tool", ""))[:128],
-                        "status": str(call.get("status", ""))[:32],
-                        "error": str(call.get("error", ""))[:500],
-                    }
-                )
+                summary = {
+                    "tool": str(call.get("tool", ""))[:128],
+                    "status": str(call.get("status", ""))[:32],
+                    "error": str(call.get("error", ""))[:500],
+                }
+                if call.get("created_tool_name"):
+                    summary["created_tool_name"] = str(
+                        call["created_tool_name"]
+                    )[:128]
+                calls.append(summary)
             rollovers = payload.get("context_rollovers", [])
             latest_rollover = (
                 rollovers[-1]
@@ -514,9 +517,20 @@ class AgentTaskTrace:
                 raw_calls = []
             calls = [
                 {
-                    "tool": str(call.get("tool", ""))[:128],
-                    "status": str(call.get("status", ""))[:32],
-                    "error": str(call.get("error", ""))[:500],
+                    **{
+                        "tool": str(call.get("tool", ""))[:128],
+                        "status": str(call.get("status", ""))[:32],
+                        "error": str(call.get("error", ""))[:500],
+                    },
+                    **(
+                        {
+                            "created_tool_name": str(
+                                call["created_tool_name"]
+                            )[:128]
+                        }
+                        if call.get("created_tool_name")
+                        else {}
+                    ),
                 }
                 for call in raw_calls[-6:]
                 if isinstance(call, dict)
@@ -554,6 +568,51 @@ class AgentTaskTrace:
                 {**context, "requirements": {}}
             ):
                 return context
+        return None
+
+    @staticmethod
+    def latest_created_tool(root: Path) -> dict[str, str] | None:
+        """Return the newest runtime-verified generated tool activation.
+
+        Follow-up turns may refer to "that tool" after one or more ordinary
+        turns.  Resolve that reference from durable lifecycle metadata rather
+        than model-authored chat or a copied test result.
+        """
+
+        checkpoints = Path(root) / "checkpoints"
+        try:
+            candidates = sorted(
+                checkpoints.glob("interactive-*.json"),
+                key=lambda path: path.stat().st_mtime_ns,
+                reverse=True,
+            )
+        except OSError:
+            return None
+        for path in candidates:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            calls = payload.get("tool_calls", [])
+            if not isinstance(calls, list):
+                continue
+            for call in reversed(calls):
+                if not isinstance(call, dict):
+                    continue
+                if call.get("status") != "succeeded":
+                    continue
+                if call.get("tool") not in {
+                    "learning_create_tool",
+                    "learning_create_snapshot_extractor",
+                }:
+                    continue
+                name = str(call.get("created_tool_name", "")).strip()
+                if not name:
+                    continue
+                return {
+                    "name": name[:128],
+                    "task_id": str(payload.get("task_id", ""))[:128],
+                }
         return None
 
     @staticmethod

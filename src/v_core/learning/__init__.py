@@ -26,6 +26,8 @@ from .source_builder import (
     SourceBlueprintError,
     build_source_blueprint,
     json_assignments,
+    repair_generated_source_argument_alias,
+    repair_generated_source_json_wrapper,
     schema_from_example,
 )
 from .storage import (
@@ -66,6 +68,8 @@ __all__ = [
     "validate_schema",
     "build_source_blueprint",
     "json_assignments",
+    "repair_generated_source_argument_alias",
+    "repair_generated_source_json_wrapper",
     "schema_from_example",
     "audit_learning_store",
 ]

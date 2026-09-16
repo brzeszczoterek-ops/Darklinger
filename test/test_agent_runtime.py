@@ -17,6 +17,7 @@ from v_core.agent import Agent
 from v_core.autonomy import ContextWindowManager, SemanticIntent, TaskContract
 from v_core.autonomy.agent_trace import AgentTaskTrace
 from v_core.capability_dispatcher import CapabilityDispatcher
+from v_core.generated_tool_contract import autonomous_web_traffic_contract
 from v_core.memory.manager import MemoryManager
 from v_core.memory.models import ExperienceEntry, KnowledgeEntry, MemorySource
 from v_core.memory.reflection import Reflection
@@ -192,6 +193,35 @@ def test_source_phase_extracts_one_valid_plain_module_after_prose() -> None:
     source = 'def run(arguments):\n    return {"wynik": int(arguments["n"]) * 2}'
 
     assert Agent._parse_generated_tool_source("Fixed it.\n\n" + source) == source
+
+
+def test_source_phase_removes_bare_identifier_before_valid_module() -> None:
+    source = (
+        "def run(arguments):\n"
+        "    return {\"wynik\": int(arguments[\"n\"]) * 2}"
+    )
+
+    assert Agent._parse_generated_tool_source("e\n" + source) == source
+
+
+def test_source_phase_rejects_multiple_run_entrypoints() -> None:
+    source = (
+        "def run(arguments):\n"
+        "    return {\"wynik\": 2}\n\n"
+        "def run(arguments):\n"
+        "    return {\"wynik\": 4}"
+    )
+
+    assert Agent._parse_generated_tool_source(source) == ""
+    assert Agent._parse_generated_tool_source("Fixed it.\n\n" + source) == ""
+    assert Agent._parse_generated_tool_source("async " + source) == ""
+
+
+@pytest.mark.parametrize("prefix", ["e; check()\n", "ready = False\nready\n"])
+def test_source_phase_preserves_module_statements(prefix: str) -> None:
+    source = prefix + "def run(arguments):\n    return {}"
+
+    assert Agent._parse_generated_tool_source(source) == source
 
 
 def test_source_phase_prompt_forbids_embedding_orchestration_in_run() -> None:
@@ -1045,6 +1075,28 @@ async def test_light_conversation_streams_and_skips_expensive_memory() -> None:
     assert answer.startswith("Hey, Boss")
     assert len(memory.session) == 1
     assert memory.processed is False
+
+
+@pytest.mark.asyncio
+async def test_capability_reply_excludes_stale_assistant_execution_claims() -> None:
+    session = Session()
+    session.add("task", {"task": "Can you build a CSV tool?",
+                         "result": "I tried three times, Boss. All failed."})
+
+    class LLMStub:
+        async def ask(self, *, messages, **kwargs):
+            assert not any("All failed" in item["content"] for item in messages)
+            assert any("CSV tool" in item["content"] for item in messages)
+            return "A CSV validator is feasible, Boss. I need the expected columns."
+
+    agent = object.__new__(Agent)
+    agent.memory = SimpleNamespace(session=session, relationship_state=RelationshipState())
+    agent.llm = LLMStub()
+    agent.persona = PersonaRuntime(identity=IdentityKernel(), voice=VoiceProfile())
+    answer = await agent._run_light_chat(
+        "Are you able to create that tool?", None, remember=False
+    )
+    assert "expected columns" in answer
 
 
 @pytest.mark.asyncio
@@ -3821,6 +3873,38 @@ async def test_llm_gives_local_artifact_generation_a_longer_timeout(
     assert completions.request["timeout"] == 900.0
 
 
+@pytest.mark.asyncio
+async def test_llm_gives_source_only_artifact_generation_a_longer_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CompletionsStub:
+        def __init__(self) -> None:
+            self.request: dict = {}
+
+        async def create(self, **kwargs):
+            self.request = kwargs
+            message = SimpleNamespace(content="def run(arguments): return arguments", tool_calls=[])
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=message, finish_reason="stop")]
+            )
+
+    monkeypatch.setenv("V_CORE_TIMEOUT", "120")
+    monkeypatch.setenv("V_CORE_ARTIFACT_TIMEOUT", "900")
+    completions = CompletionsStub()
+    llm = object.__new__(LLM)
+    llm.config = SimpleNamespace(model="local", temperature=0.2, top_p=0.9)
+    llm.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    llm._native_tools_supported = None
+
+    await llm.respond(
+        messages=[{"role": "user", "content": "Write the reusable operation"}],
+        max_tokens=1536,
+        artifact_generation=True,
+    )
+
+    assert completions.request["timeout"] == 900.0
+
+
 def test_llm_local_transport_uses_one_long_request_without_hidden_retries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4141,6 +4225,68 @@ def test_agent_narrows_post_creation_phase_to_generated_tool() -> None:
     assert [item["function"]["name"] for item in selected] == [
         "extract_book_cards"
     ]
+
+
+def test_agent_does_not_reexpose_builder_when_created_tool_is_missing_from_catalog() -> None:
+    definitions = [
+        {"type": "function", "function": {"name": name}}
+        for name in (
+            "browser_snapshot",
+            "learning_create_tool",
+        )
+    ]
+    contract = TaskContract(
+        requires_created_tool=True,
+        requires_created_tool_execution=True,
+    )
+    calls = [
+        {
+            "tool": "learning_create_tool",
+            "status": "succeeded",
+            "result_excerpt": json.dumps(
+                {"name": "extract_book_cards", "status": "active"}
+            ),
+        }
+    ]
+
+    selected = Agent._phase_tool_definitions(contract, definitions, calls)
+
+    assert selected == []
+
+
+def test_agent_closes_creation_and_generated_tool_after_generated_execution() -> None:
+    definitions = [
+        {"type": "function", "function": {"name": name}}
+        for name in (
+            "browser_navigate",
+            "browser_snapshot",
+            "learning_create_tool",
+            "learning_create_snapshot_extractor",
+            "har_traffic_summary",
+        )
+    ]
+    contract = TaskContract(
+        requires_browser_navigation=True,
+        requires_browser_snapshot=True,
+        requires_created_tool=True,
+        requires_created_tool_execution=True,
+    )
+    calls = [
+        {
+            "tool": "learning_create_tool",
+            "status": "succeeded",
+            "created_tool_name": "har_traffic_summary",
+            "result_excerpt": '{"name":"har_traffic_summary","padding":"clipped',
+        },
+        {"tool": "har_traffic_summary", "status": "succeeded"},
+    ]
+
+    selected = Agent._phase_tool_definitions(contract, definitions, calls)
+
+    assert {item["function"]["name"] for item in selected} == {
+        "browser_navigate",
+        "browser_snapshot",
+    }
 
 
 def test_agent_narrows_post_template_creation_to_generated_tool() -> None:
@@ -4468,6 +4614,8 @@ def test_explicit_web_address_keeps_interactive_browser_controls() -> None:
     "prompt",
     [
         "V, czy potrafisz tworzyć własne narzędzia?",
+        "Powiedz mi, czy potrafiłabyś stworzyć narzędzie do rejestrowania ruchu na stronie?",
+        "Are you able to create a page monitoring tool?",
         "How do I read a local file safely?",
         "Why do agents sometimes invoke tools during a conversation?",
         "Tell me what you think about tools in agent frameworks.",
@@ -9130,6 +9278,90 @@ async def test_two_mangled_final_reports_fall_back_to_verified_evidence(
 
 
 @pytest.mark.asyncio
+async def test_two_empty_final_reports_fall_back_to_verified_evidence(
+    tmp_path: Path,
+) -> None:
+    exact_url = "https://example.test"
+
+    class ToolsStub:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def openai_tool_definitions(self) -> list[dict]:
+            return [
+                {"type": "function", "function": {"name": name}}
+                for name in ("browser_navigate", "browser_snapshot")
+            ]
+
+        async def call(self, tool: str, arguments: dict) -> str:
+            self.calls.append(tool)
+            if tool == "browser_snapshot":
+                return (
+                    f"- Page URL: {exact_url}\n"
+                    "- Page Title: Verified Example\n"
+                    '- heading "Observed content" [level=2]'
+                )
+            return f"- Page URL: {exact_url}"
+
+    class LLMStub:
+        config = SimpleNamespace(context=8_192)
+
+        def __init__(self) -> None:
+            self.turn = 0
+
+        async def respond(self, **kwargs) -> LLMResponse:
+            self.turn += 1
+            if self.turn == 1:
+                return LLMResponse(
+                    tool_calls=[
+                        LLMToolCall(
+                            "navigate",
+                            "browser_navigate",
+                            {"url": exact_url},
+                        )
+                    ]
+                )
+            if self.turn == 2:
+                return LLMResponse(
+                    tool_calls=[LLMToolCall("snapshot", "browser_snapshot", {})]
+                )
+            return LLMResponse(content="")
+
+    class MemoryStub:
+        def __init__(self) -> None:
+            self.session = Session()
+
+        async def process(self, *args, **kwargs) -> None:
+            return None
+
+    tools = ToolsStub()
+    llm = LLMStub()
+    agent = object.__new__(Agent)
+    agent.llm = llm
+    agent.tools = tools
+    agent.memory = MemoryStub()
+    agent.persona = PersonaRuntime(identity=IdentityKernel(), voice=VoiceProfile())
+    agent._build_system_prompt = lambda prompt, agent_mode: "system"
+    agent._agent_trace_root = tmp_path / "interactive"
+    agent._last_execution_context = None
+
+    answer = await agent._run_agent_loop(
+        f"Inspect {exact_url} and report what is there."
+    )
+    await asyncio.gather(*agent._memory_tasks)
+
+    assert llm.turn == 4
+    assert tools.calls == ["browser_navigate", "browser_snapshot"]
+    assert "returned an empty grounded report twice" in answer
+    assert f"Source: {exact_url}" in answer
+    journal = next(
+        (agent._agent_trace_root / "journal").glob("*.jsonl")
+    ).read_text(encoding="utf-8")
+    assert "empty_final_answer_rejected" in journal
+    assert "final_answer_loop_cut_off" in journal
+
+
+@pytest.mark.asyncio
 async def test_direct_url_failure_is_reported_after_one_attempt(tmp_path: Path) -> None:
     class ToolsStub:
         def __init__(self) -> None:
@@ -9376,6 +9608,422 @@ def test_voice_fallback_preserves_result_but_strips_service_tail() -> None:
     assert not looks_generic_assistant_voice(answer)
 
 
+def test_online_tool_scope_stop_keeps_v_voice_and_truthful_state() -> None:
+    answer = Agent._online_tool_scope_clarification()
+
+    assert "three different signals" in answer
+    assert "safe test URL" in answer
+    assert "I haven't generated or run anything yet" in answer
+    assert "expected number" in answer
+    assert not looks_generic_assistant_voice(answer)
+
+
+@pytest.mark.asyncio
+async def test_delegated_web_traffic_creation_freezes_runtime_fixture_without_clarifying() -> None:
+    prompt = (
+        "Cześć V. Stwórz narzędzie do monitorowania ruchu na stronach WWW. "
+        "Sama wybierz jakąkolwiek stronę do testu, potem przedstaw raport."
+    )
+
+    class ToolsStub:
+        def __init__(self) -> None:
+            self.contract = None
+            self.active = False
+            self.calls: list[tuple[str, dict]] = []
+
+        def set_generated_tool_contract(self, contract) -> None:
+            self.contract = contract
+
+        async def openai_tool_definitions(self) -> list[dict]:
+            definitions = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "browser_navigate",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"url": {"type": "string"}},
+                            "required": ["url"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "browser_snapshot",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "learning_create_tool",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"source": {"type": "string"}},
+                            "required": ["source"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "har_traffic_summary",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"har_json": {"type": "string"}},
+                            "required": ["har_json"],
+                        },
+                    },
+                },
+            ]
+            return definitions
+
+        async def call(self, tool: str, arguments: dict) -> str:
+            self.calls.append((tool, arguments))
+            if tool == "browser_navigate":
+                assert arguments == {"url": "https://example.com"}
+                return "navigated"
+            if tool == "browser_snapshot":
+                return "Example Domain"
+            if tool == "learning_create_tool":
+                assert self.contract is not None
+                assert self.contract.provenance == "runtime_independent_har_oracle"
+                assert "harJson" not in arguments["source"]
+                assert "har_json" in arguments["source"]
+                assert "['log']" in arguments["source"]
+                self.active = True
+                return json.dumps(
+                    {
+                        # Real lifecycle receipts are longer than the bounded
+                        # model-facing excerpt.  The created name must remain
+                        # available from trusted runtime metadata after clipping.
+                        "receipt_padding": "x" * 3_000,
+                        "name": "har_traffic_summary",
+                        "status": "active",
+                        "validation": {"passed": True, "tests": [{"passed": True}]},
+                    }
+                )
+            if tool == "har_traffic_summary":
+                assert arguments == self.contract.final_arguments
+                return json.dumps(
+                    {
+                        "requests_count": 2,
+                        "domains": ["example.com"],
+                        "error_count": 1,
+                        "total_time_ms": 10.0,
+                    }
+                )
+            raise AssertionError(tool)
+
+    class LLMStub:
+        config = SimpleNamespace(context=12_000)
+
+        def __init__(self) -> None:
+            self.turn = 0
+
+        async def respond(self, **kwargs) -> LLMResponse:
+            self.turn += 1
+            if self.turn == 1:
+                return LLMResponse(
+                    tool_calls=[
+                        LLMToolCall(
+                            "navigate",
+                            "browser_navigate",
+                            {"url": "https://wrong.invalid"},
+                        )
+                    ]
+                )
+            if self.turn == 2:
+                return LLMResponse(
+                    tool_calls=[LLMToolCall("snapshot", "browser_snapshot", {})]
+                )
+            if self.turn == 3:
+                assert kwargs.get("tools") is None
+                assert "runtime-selected reusable operation" in kwargs["messages"][0]["content"]
+                return LLMResponse(
+                    content=(
+                        "import json\n"
+                        "def run(arguments):\n"
+                        "    document = json.loads(arguments['harJson'])\n"
+                        "    entries = document.get('entries', [])\n"
+                        "    domains = sorted({row['request']['url'].split('://', 1)[-1]"
+                        ".split('/', 1)[0].split(':', 1)[0].lower() for row in entries})\n"
+                        "    return {'requests_count': len(entries), 'domains': domains, "
+                        "'error_count': sum(row['response']['status'] >= 400 for row in entries), "
+                        "'total_time_ms': sum(max(0, row['time']) for row in entries)}"
+                    )
+                )
+            if self.turn >= 4:
+                assert kwargs.get("tools") is None
+                return LLMResponse(
+                    content=(
+                        "Boss, the sandbox checks passed and the live fixture "
+                        "reported requests_count 2, domain example.com, one HTTP "
+                        "error, and 10 milliseconds total time."
+                    )
+                )
+            raise AssertionError("runtime should bind creation and final execution")
+
+    class MemoryStub:
+        def __init__(self) -> None:
+            self.session = Session()
+
+        async def process(self, *args, **kwargs) -> None:
+            return None
+
+    agent = object.__new__(Agent)
+    agent.llm = LLMStub()
+    agent.tools = ToolsStub()
+    agent.memory = MemoryStub()
+    agent.persona = PersonaRuntime(identity=IdentityKernel(), voice=VoiceProfile())
+    agent._build_system_prompt = lambda prompt, agent_mode: "system"
+
+    answer = await agent._run_agent_loop(prompt)
+    await asyncio.gather(*agent._memory_tasks)
+
+    assert [name for name, _ in agent.tools.calls] == [
+        "browser_navigate",
+        "browser_snapshot",
+        "learning_create_tool",
+        "har_traffic_summary",
+    ]
+    assert "requests_count" in answer
+    assert "generated tool test contract" not in answer.casefold()
+
+
+@pytest.mark.asyncio
+async def test_referenced_har_tool_requires_fresh_current_input(
+    tmp_path: Path,
+) -> None:
+    class ToolsStub:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        async def openai_tool_definitions(self) -> list[dict]:
+            return [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "browser_navigate",
+                        "description": "Open a page",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"url": {"type": "string"}},
+                            "required": ["url"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "browser_snapshot",
+                        "description": "Observe a page",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "description": "Find a page",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"query": {"type": "string"}},
+                            "required": ["query"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "har_traffic_summary",
+                        "description": "Summarize supplied HAR JSON",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "har_json": {"type": "string"},
+                            },
+                            "required": ["har_json"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+            ]
+
+        async def call(self, tool: str, arguments: dict) -> str:
+            self.calls.append((tool, arguments))
+            raise AssertionError("no tool may run without current HAR data")
+
+    class IntentRouterStub:
+        async def classify(self, *args, **kwargs) -> SemanticIntent:
+            return SemanticIntent(
+                action_requested=True,
+                references_previous=True,
+                capabilities=("browser",),
+                requires_report=True,
+                execute_created_artifact=True,
+                web_query="Softronic",
+            )
+
+    class LLMStub:
+        config = SimpleNamespace(context=8_192)
+
+        async def respond(self, **kwargs) -> LLMResponse:
+            raise AssertionError("runtime must stop before model execution")
+
+    class MemoryStub:
+        def __init__(self) -> None:
+            self.session = Session()
+
+        async def process(self, *args, **kwargs) -> None:
+            return None
+
+    creation = AgentTaskTrace(tmp_path, "Create the traffic tool")
+    sequence = creation.tool_started("learning_create_tool", {"source": "..."})
+    creation.tool_calls[sequence - 1]["created_tool_name"] = (
+        "har_traffic_summary"
+    )
+    creation.tool_finished(sequence, '{"name":"har_traffic_summary"}')
+    creation.complete("Created and tested with a synthetic fixture.")
+
+    tools = ToolsStub()
+    agent = object.__new__(Agent)
+    agent.llm = LLMStub()
+    agent.intent_router = IntentRouterStub()
+    agent.tools = tools
+    agent.memory = MemoryStub()
+    agent.persona = PersonaRuntime(identity=IdentityKernel(), voice=VoiceProfile())
+    agent.context_window = ContextWindowManager()
+    agent._agent_trace_root = tmp_path
+    agent._last_execution_context = AgentTaskTrace.latest_context(tmp_path)
+    agent._memory_tasks = set()
+    agent._build_system_prompt = lambda prompt, agent_mode: "system"
+
+    answer = await agent._run_agent_loop(
+        "Użyj tego narzędzia na stronie firmy Softronic i podaj raport o ruchu."
+    )
+    await asyncio.gather(*agent._memory_tasks)
+
+    assert tools.calls == []
+    assert "will not recycle its synthetic test fixture" in answer
+    assert "Nothing was run" in answer
+    checkpoint = AgentTaskTrace.latest_context(tmp_path)
+    assert checkpoint is not None
+    assert checkpoint["requirements"]["required_tools"] == [
+        "har_traffic_summary"
+    ]
+    assert checkpoint["status"] == "awaiting_owner"
+
+
+def test_verified_tool_fallback_keeps_v_voice_when_rewrite_collapses() -> None:
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                "=== UNTRUSTED TOOL OUTPUT ===\n"
+                "Tool: demo_probe\n"
+                "Arguments: {}\n"
+                "Status: succeeded\n"
+                "Provider: local\n"
+                "Result:\nverified\n"
+                "=== END UNTRUSTED TOOL OUTPUT ==="
+            ),
+        }
+    ]
+
+    answer = Agent._verified_tool_result_fallback(messages)
+
+    assert "runtime actually proved" in answer
+    assert "verified" in answer
+    assert not looks_generic_assistant_voice(answer)
+
+
+def test_generated_har_fallback_preserves_execution_and_separates_fixture_from_live_page() -> None:
+    generated_contract = autonomous_web_traffic_contract(
+        "Stwórz narzędzie do monitorowania ruchu WWW i sama wybierz stronę do testu."
+    )
+    calls = [
+        {
+            "tool": "learning_create_tool",
+            "status": "succeeded",
+            "created_tool_name": "har_traffic_summary",
+            "result_excerpt": '{"activation_count":1,"artifact_id":"clipped',
+        },
+        {
+            "tool": "har_traffic_summary",
+            "status": "succeeded",
+            "binding_source": "runtime_objective_fixture",
+            "result_excerpt": json.dumps(
+                {
+                    "domains": ["example.com"],
+                    "error_count": 1,
+                    "requests_count": 2,
+                    "total_time_ms": 10.0,
+                }
+            ),
+        },
+        {
+            "tool": "browser_snapshot",
+            "status": "succeeded",
+            "result_excerpt": (
+                "### Page\n- Page URL: https://example.com/\n"
+                "- Page Title: Example Domain\n- HTTP status: 304\n"
+                "### Snapshot\n```yaml\n- generic [ref=e2]\n```"
+            ),
+        },
+    ]
+
+    answer = Agent._verified_tool_result_fallback(
+        [],
+        verified_calls=calls,
+        generated_contract=generated_contract,
+    )
+
+    assert "Created, validated, and activated tool: har_traffic_summary" in answer
+    assert "Synthetic runtime fixture result" in answer
+    assert '"requests_count": 2' in answer
+    assert "Source: https://example.com/" in answer
+    assert "does not measure server-side visitors" in answer
+    assert "generic [ref=" not in answer
+
+
+def test_generated_har_report_requires_fixture_and_scope_disclosure() -> None:
+    generated_contract = autonomous_web_traffic_contract(
+        "Stwórz narzędzie do monitorowania ruchu WWW i sama wybierz stronę do testu."
+    )
+    calls = [
+        {
+            "tool": "learning_create_tool",
+            "status": "succeeded",
+            "created_tool_name": "har_traffic_summary",
+        },
+        {"tool": "har_traffic_summary", "status": "succeeded"},
+    ]
+
+    assert Agent._generated_tool_report_issues(
+        "The page made two requests in ten milliseconds.",
+        generated_contract,
+        calls,
+    ) == [
+        "answer:generated_fixture_not_disclosed",
+        "answer:generated_tool_scope_missing",
+    ]
+    assert Agent._generated_tool_report_issues(
+        "The synthetic fixture produced two requests. This client-side tool "
+        "does not measure server-side visitors.",
+        generated_contract,
+        calls,
+    ) == []
+
+
 def test_bland_word_salad_clarification_is_detected() -> None:
     assert looks_bland_clarification(
         "You're speaking in code. What's the actual message?"
@@ -9553,7 +10201,7 @@ async def test_completed_tool_work_skips_third_voice_rewrite() -> None:
     )
 
     assert agent.llm.calls == 1
-    assert "verified runtime evidence directly" in answer
+    assert "runtime actually proved" in answer
     assert url in answer
     assert "Antique Chamber Pot" in answer
     assert "Would you like" not in answer
@@ -10614,6 +11262,29 @@ async def test_browser_mcp_contexts_close_with_matching_exit_signature() -> None
     assert stdio.exit_args == (None, None, None)
     assert tools.browser_ready is False
     assert tools.browser_session is None
+
+
+@pytest.mark.asyncio
+async def test_agent_closes_browser_session_in_the_turn_task() -> None:
+    turn_task = None
+    close_task = None
+
+    class ToolsStub:
+        async def close_browser_session(self) -> None:
+            nonlocal close_task
+            close_task = asyncio.current_task()
+
+    async def run_turn(prompt: str, on_token=None) -> str:
+        nonlocal turn_task
+        turn_task = asyncio.current_task()
+        return "done"
+
+    agent = object.__new__(Agent)
+    agent.tools = ToolsStub()
+    agent._run_turn = run_turn
+
+    assert await agent.run("test") == "done"
+    assert close_task is turn_task
 
 
 @pytest.mark.asyncio

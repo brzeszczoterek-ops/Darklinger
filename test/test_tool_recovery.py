@@ -369,7 +369,7 @@ async def test_open_circuit_reports_skipped_execution_and_historical_error(
             tool="broken_transform",
             requested_tool="broken_transform",
             arguments={"value": 3},
-            error="ArtifactValidationError: fixture comparison failed",
+            error="RuntimeError: sandbox service unavailable",
         )
     calls: list[str] = []
 
@@ -393,7 +393,7 @@ async def test_open_circuit_reports_skipped_execution_and_historical_error(
     assert outcome.failure_details["reason"] == "matching_providers_circuit_open"
     assert "no provider was executed" in outcome.error
     assert "historical previous failure" in outcome.error
-    assert "fixture comparison failed" in outcome.error
+    assert "sandbox service unavailable" in outcome.error
     assert "all capability providers failed" not in outcome.error
     assert outcome.result.startswith("Tool execution not started:")
 

@@ -10,6 +10,7 @@ from v_core.generated_tool_contract import (
     GeneratedToolContract,
     GeneratedToolContractError,
     GeneratedToolTest,
+    autonomous_web_traffic_contract,
     has_natural_fixture_candidate,
     parse_generated_tool_contract,
 )
@@ -118,6 +119,75 @@ def test_single_input_alias_is_canonicalized_without_guessing_between_fields():
     assert contract.final_arguments == {"liczba": 9}
 
 
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        (
+            "V, stwórz narzędzie do monitorowania ruchu na stronach WWW. "
+            "Sama wybierz dowolną stronę do testu i przedstaw raport."
+        ),
+        (
+            "Create a tool to monitor network traffic on a website. Pick any "
+            "safe site yourself, test it, and report the result."
+        ),
+    ],
+)
+def test_delegated_web_traffic_tool_gets_runtime_owned_har_oracle(prompt):
+    contract = autonomous_web_traffic_contract(prompt)
+
+    assert contract is not None
+    assert contract.name_hint == "har_traffic_summary"
+    assert contract.provenance == "runtime_independent_har_oracle"
+    assert len(contract.tests) == 3
+    assert set(contract.tests[0].arguments) == {"har_json"}
+    assert contract.tests[0].expected == {
+        "requests_count": 3,
+        "domains": ["cdn.example.com", "example.com"],
+        "error_count": 1,
+        "total_time_ms": 20.0,
+    }
+    assert "server-side visitor analytics" in contract.specification
+    assert "example.com" in contract.final_evidence_quote
+    assert GeneratedToolContract.from_dict(contract.to_dict()) == contract
+
+
+def test_web_traffic_default_requires_explicit_delegation_of_test_target():
+    assert autonomous_web_traffic_contract(
+        "Stwórz narzędzie do monitorowania ruchu na stronach WWW."
+    ) is None
+
+
+def test_delegated_web_traffic_accepts_spoken_polish_past_tense():
+    contract = autonomous_web_traffic_contract(
+        "Cześć V. Stwórz narzędzie do obserwacji i monitorowania ruchu na "
+        "stronach WWW. Chciałbym, żebyś sama podjęła decyzję, na jakiej "
+        "stronie je przetestować. Potem przedstaw mi raport."
+    )
+
+    assert contract is not None
+    assert contract.archetype == "client_har_summary"
+    assert contract.name_hint == "har_traffic_summary"
+
+
+def test_semantic_web_traffic_delegation_does_not_depend_on_prompt_language():
+    contract = autonomous_web_traffic_contract(
+        "任意の安全なサイトを自分で選んでテストしてください。",
+        semantic_archetype="client_web_traffic_monitor",
+        delegates_test_target=True,
+    )
+
+    assert contract is not None
+    assert contract.archetype == "client_har_summary"
+
+
+def test_semantic_web_traffic_requires_grounded_target_delegation():
+    assert autonomous_web_traffic_contract(
+        "任意の安全なサイトを自分で選んでテストしてください。",
+        semantic_archetype="client_web_traffic_monitor",
+        delegates_test_target=False,
+    ) is None
+
+
 @pytest.mark.asyncio
 async def test_source_builder_runs_every_frozen_semantic_test(tmp_path: Path):
     envelope = AuthorizationEnvelope(workspace=str(tmp_path / "workspace"))
@@ -147,7 +217,8 @@ async def test_source_builder_runs_every_frozen_semantic_test(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_agent_freezes_natural_tests_before_source_and_binds_final_input():
+@pytest.mark.parametrize("empty_first", [False, True])
+async def test_agent_freezes_natural_tests_before_source_and_binds_final_input(empty_first):
     prompt = (
         "Stwórz narzędzie o nazwie podwoj_liczbe. Przetestuj je: "
         "dla 2 ma dać 4, a dla 7 ma dać 14. Potem użyj go dla n = 9 i pokaż wynik."
@@ -211,6 +282,7 @@ async def test_agent_freezes_natural_tests_before_source_and_binds_final_input()
 
     class Model:
         config = SimpleNamespace(context=12_000)
+        source_turns = 0
 
         async def ask(self, **kwargs):
             assert kwargs.get("response_format")
@@ -226,6 +298,9 @@ async def test_agent_freezes_natural_tests_before_source_and_binds_final_input()
             })
 
         async def respond(self, **kwargs):
+            self.source_turns += 1
+            if empty_first and self.source_turns == 1:
+                return LLMResponse(content="", finish_reason="length")
             assert kwargs["tools"] is None
             assert "arguments['n']" in kwargs["messages"][0]["content"]
             return LLMResponse(
@@ -252,3 +327,4 @@ async def test_agent_freezes_natural_tests_before_source_and_binds_final_input()
     assert tools.calls[0][0] == "learning_create_tool"
     assert tools.calls[1] == ("podwoj_liczbe", {"n": 9})
     assert '"result": 18' in answer
+    assert agent.llm.source_turns == (2 if empty_first else 1)

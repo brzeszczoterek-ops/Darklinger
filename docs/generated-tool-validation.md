@@ -85,9 +85,30 @@ Source-draft validation is part of that same accounting even before the builder
 is called. The trace records it as `runtime_validate_generated_tool_source`, not
 as a fabricated provider execution. Repeated identical valid fenced modules are
 deduplicated and accepted; two distinct valid modules remain ambiguous and are
-rejected. The source phase is capped at 384 generated tokens and tells the model
+rejected. The source phase allows up to 1536 generated tokens and tells the model
 to implement only the reusable `run(arguments)` operation. Tests, activation and
-the final invocation remain runtime-owned phases.
+the final invocation remain runtime-owned phases. Source generation receives an
+isolated phase prompt and bounded runtime rejection feedback, not stale assistant
+status claims from the conversation.
+
+An empty source response is recorded as a rejected draft, with the provider's
+finish reason when available, and consumes the same repair budget. It cannot
+skip failure accounting or be reported as an exhausted 32-step batch. Scripted
+regressions cover both recovery after an empty answer and stopping after three
+empty drafts without invoking a builder.
+
+Source-only requests explicitly select the artifact HTTP timeout, although they
+expose no callable tool schema. The first awaited operation has a 600-second
+executor bound. Once a creation attempt is recorded, later operations use the
+remaining shared budget described above. This prevents the ordinary conversation
+HTTP timeout from aborting a slow source response while still bounding execution.
+
+The source parser can remove standalone bare identifiers preceding the module
+(observed on a live model as a stray `e`). It preserves lines with other
+statements and identifiers inside the module. Duplicate `run` definitions,
+including asynchronous variants, are rejected rather than recovered by selecting
+the last definition. Syntax-valid rejected modules cannot use prose recovery to
+discard earlier code. Source policy and sandbox validation still run afterward.
 
 Each test retains its index, name, status (`passed`, `failed`, or `not_run`),
 whether execution was attempted, and the stage reached:
@@ -175,3 +196,48 @@ input alias (`liczba` versus `n`), and froze two tests. Bubblewrap reported two
 passed comparisons, PALADYN activated `podwoj_liczbe`, and the runtime-bound
 final call returned `{"wynik": 18}`. One malformed source draft was rejected
 before the successful draft; no test oracle was taken from candidate output.
+
+## Explicit contracts and a reusable local example
+
+Expert callers may include one bounded `tool_contract=<JSON>` object in the
+owner objective. PALADYN freezes its one-to-eight input/output cases directly,
+without spending a model turn to reinterpret escaped data. The contract is
+immutable, requires consistent field names and a separately supplied final
+input, and rejects conflicting or non-finite values. Embedded example URLs are
+treated as data, so they cannot accidentally route an offline task to browser
+navigation.
+
+For online creation, the owner need not predict dynamic numeric results. PALADYN
+still requires an observation boundary (a safe URL and the meaning of “traffic”)
+because page loads, HTTP requests, and server-side visitor counts are different
+measurements. If that boundary is absent, it pauses once for that information
+before code generation; it does not spend creation attempts or ask for a made-up
+expected number.
+
+`scripts/verify_generated_har_tool.py` is a harmless end-to-end trial using
+synthetic HAR-shaped JSON strings. The live local model wrote `har_summary`
+without a supplied implementation; Bubblewrap passed three fixed cases,
+executed a separate final case, then a holdout and a fresh runtime reload. The
+verified holdout result was 3 requests, domains `other.example` and
+`unseen.example`, 1 error, and 2.0 ms total. The trial artifacts and evidence
+remain in its printed temporary directory; this does not grant network access
+to generated tools.
+
+On 2026-09-16 the current parser was also checked by replaying the actual draft
+that previously failed with a leading `e`. Three fixed sandbox cases passed;
+the separate final case returned 2 requests, 1 error and 10.0 ms, and the unseen
+case returned the holdout result above both before and after runtime reload.
+Artifacts: `/tmp/paladyn-har-parser-replay-vikj75f8`. This is a replay of captured
+model output, distinct from a fresh model generation. The final automated suites
+passed 1012 Full and 943 freshly exported Public tests.
+
+The fresh local AgenticQwen run on 2026-09-16 also passed. Its trace
+`interactive-fcb7f03d174a47dcbc8046fa03dddd9b` records a truncated first draft
+(`finish_reason: length`), a successful `learning_create_tool`, and a successful
+`har_summary` invocation before completion. All three fixed cases passed in
+Bubblewrap; the independent holdout and fresh-runtime reload matched their
+expected results. Evidence is under `/tmp/paladyn-har-trial-8dn8ncti`, including
+`report.json` and the checkpoint/journal. The run lasted 603 seconds, from
+02:42:50 to 02:52:54 UTC. Slow generation remains a practical limitation. This
+trial exercises explicit synthetic HAR inputs and expectations, not live website
+traffic capture, general natural-language contract discovery, or every tool.

@@ -40,6 +40,10 @@ class GeneratedToolContract:
     final_arguments: dict[str, Any]
     final_evidence_quote: str
     provenance: str = "owner_text_semantic_extraction"
+    name_hint: str = ""
+    description_hint: str = ""
+    specification: str = ""
+    archetype: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -47,6 +51,10 @@ class GeneratedToolContract:
             "final_arguments": deepcopy(self.final_arguments),
             "final_evidence_quote": self.final_evidence_quote,
             "provenance": self.provenance,
+            "name_hint": self.name_hint,
+            "description_hint": self.description_hint,
+            "specification": self.specification,
+            "archetype": self.archetype,
         }
 
     @classmethod
@@ -63,7 +71,154 @@ class GeneratedToolContract:
             final_arguments=deepcopy(value.get("final_arguments", {})),
             final_evidence_quote=str(value.get("final_evidence_quote", "")),
             provenance=str(value.get("provenance", "owner_text_semantic_extraction")),
+            name_hint=str(value.get("name_hint", "")),
+            description_hint=str(value.get("description_hint", "")),
+            specification=str(value.get("specification", "")),
+            archetype=str(value.get("archetype", "")),
         )
+
+
+_CREATE_WEB_TRAFFIC_TOOL = re.compile(
+    r"(?:\b(?:create|build|implement|generate)\w*\b.{0,180}\btool\w*\b|"
+    r"\b(?:stworz|stwórz|utworz|utwórz|zbuduj|wygeneruj|zaimplementuj)\w*\b"
+    r".{0,180}\b(?:narzedzi|narzędzi)\w*\b)",
+    re.IGNORECASE | re.DOTALL,
+)
+_WEB_TRAFFIC = re.compile(
+    r"(?:\b(?:monitor|observe|inspect|summari[sz]e)\w*\b.{0,100}"
+    r"\b(?:http\s+requests?|network\s+traffic|traffic)\b|"
+    r"\b(?:obserw|monitor|sprawdz)\w*\b.{0,100}\bruch\w*\b)",
+    re.IGNORECASE | re.DOTALL,
+)
+_WEB_TARGET = re.compile(
+    r"\b(?:web(?:site|page)?|site|page|stron\w*|witryn\w*|www)\b",
+    re.IGNORECASE,
+)
+_DELEGATES_TEST_TARGET = re.compile(
+    r"\b(?:any\s+(?:safe\s+)?(?:website|site|page)|pick\w*\s+(?:one|a\s+site)|"
+    r"choose\w*\s+(?:one|a\s+site)|your(?:\s+own)?\s+choice|"
+    r"jakiejkolwiek\s+stron\w*|dowoln\w*\s+stron\w*|"
+    r"sam[ao]?\s+(?:wybierz|wybiera|podejm|podj[eę][łl])\w*|"
+    r"(?:podejm|podj[eę][łl])\w*\s+(?:samodzieln\w*\s+)?decyzj\w*)\b",
+    re.IGNORECASE,
+)
+
+
+def autonomous_web_traffic_contract(
+    prompt: str,
+    *,
+    semantic_archetype: str = "",
+    delegates_test_target: bool = False,
+) -> GeneratedToolContract | None:
+    """Return an independent safe oracle when Boss delegates the test target.
+
+    Generated tools remain offline.  This archetype therefore analyzes supplied
+    HAR data; the browser phase may visit the harmless target, but PALADYN never
+    pretends that an accessibility snapshot exposes server-side visitor logs.
+    The expected answers are runtime-owned and fixed before candidate source is
+    generated, so failed approaches remain meaningful instead of self-grading.
+    """
+
+    text = str(prompt or "")
+    lexical_match = all(
+        pattern.search(text)
+        for pattern in (
+            _CREATE_WEB_TRAFFIC_TOOL,
+            _WEB_TRAFFIC,
+            _WEB_TARGET,
+            _DELEGATES_TEST_TARGET,
+        )
+    )
+    semantic_match = (
+        semantic_archetype == "client_web_traffic_monitor"
+        and delegates_test_target
+    )
+    if not lexical_match and not semantic_match:
+        return None
+
+    def har(rows: list[tuple[str, int, float]]) -> dict[str, str]:
+        return {
+            "har_json": json.dumps(
+                {
+                    "log": {
+                        "version": "1.2",
+                        "entries": [
+                            {
+                                "request": {"url": url, "method": "GET"},
+                                "response": {"status": status},
+                                "time": duration,
+                            }
+                            for url, status, duration in rows
+                        ],
+                    }
+                },
+                separators=(",", ":"),
+            )
+        }
+
+    def expected(
+        count: int,
+        domains: list[str],
+        errors: int,
+        duration: float,
+    ) -> dict[str, Any]:
+        return {
+            "requests_count": count,
+            "domains": domains,
+            "error_count": errors,
+            "total_time_ms": duration,
+        }
+
+    cases = (
+        GeneratedToolTest(
+            har(
+                [
+                    ("https://example.com/", 200, 12.5),
+                    ("https://example.com/app.js", 404, 7.5),
+                    ("https://cdn.example.com/theme.css", 200, -1.0),
+                ]
+            ),
+            expected(3, ["cdn.example.com", "example.com"], 1, 20.0),
+            "runtime-owned independent HAR fixture: mixed responses",
+        ),
+        GeneratedToolTest(
+            har([]),
+            expected(0, [], 0, 0.0),
+            "runtime-owned independent HAR fixture: empty trace",
+        ),
+        GeneratedToolTest(
+            har([("https://example.com/redirect", 302, 4.0)]),
+            expected(1, ["example.com"], 0, 4.0),
+            "runtime-owned independent HAR fixture: redirect",
+        ),
+    )
+    return GeneratedToolContract(
+        tests=cases,
+        final_arguments=har(
+            [
+                ("https://example.com/", 200, 8.0),
+                ("https://example.com/favicon.ico", 503, 2.0),
+            ]
+        ),
+        final_evidence_quote=(
+            "runtime-selected bounded demonstration trace for https://example.com"
+        ),
+        provenance="runtime_independent_har_oracle",
+        name_hint="har_traffic_summary",
+        description_hint=(
+            "Summarize client-visible HTTP request traffic from supplied HAR JSON."
+        ),
+        specification=(
+            "Parse arguments['har_json'] as HAR 1.2 JSON and read log.entries. "
+            "Return requests_count for all entries; domains as sorted unique "
+            "lowercase request URL hostnames without ports; error_count for "
+            "response status at least 400; and total_time_ms as the sum of "
+            "nonnegative entry time values, ignoring negative durations. This "
+            "tool analyzes supplied client-side request data only and never "
+            "claims access to server-side visitor analytics."
+        ),
+        archetype="client_har_summary",
+    )
 
 
 _RESPONSE_FORMAT: dict[str, Any] = {
@@ -236,6 +391,9 @@ def parse_generated_tool_contract(response: str, prompt: str) -> GeneratedToolCo
 
 
 async def extract_generated_tool_contract(llm: Any, prompt: str) -> GeneratedToolContract:
+    explicit = explicit_generated_tool_contract(prompt)
+    if explicit is not None:
+        return explicit
     response = await llm.ask(
         messages=[
             {"role": "system", "content": _SYSTEM_PROMPT},
@@ -249,3 +407,46 @@ async def extract_generated_tool_contract(llm: Any, prompt: str) -> GeneratedToo
         response_format=_RESPONSE_FORMAT,
     )
     return parse_generated_tool_contract(str(response), prompt)
+
+
+def explicit_generated_tool_contract(prompt: str) -> GeneratedToolContract | None:
+    """Freeze an owner-supplied JSON contract without model transcription."""
+    markers = list(re.finditer(r"(?<![\w.])tool_contract\s*=\s*", prompt))
+    if not markers:
+        return None
+    if len(markers) != 1:
+        raise GeneratedToolContractError("supply exactly one tool_contract")
+    try:
+        value, end = json.JSONDecoder().raw_decode(prompt[markers[0].end():])
+        encoded = json.dumps(value, allow_nan=False)
+    except (TypeError, ValueError) as error:
+        raise GeneratedToolContractError("tool_contract must be finite JSON") from error
+    if not isinstance(value, dict) or len(encoded) > 100_000:
+        raise GeneratedToolContractError("tool_contract must be a bounded object")
+    cases, final = value.get("tests"), value.get("final_arguments")
+    if not isinstance(cases, list) or not 1 <= len(cases) <= 8:
+        raise GeneratedToolContractError("tool_contract requires one to eight tests")
+    quote = prompt[markers[0].end():markers[0].end() + end]
+    tests = []
+    input_keys = output_keys = None
+    seen = {}
+    for case in cases:
+        if not isinstance(case, dict):
+            raise GeneratedToolContractError("each test must be an object")
+        arguments, expected = case.get("arguments"), case.get("expected")
+        if not isinstance(arguments, dict) or not arguments or not isinstance(expected, dict) or not expected:
+            raise GeneratedToolContractError("each test needs nonempty arguments and expected output")
+        if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", key) for key in arguments):
+            raise GeneratedToolContractError("invalid input field name")
+        keys, outputs = tuple(sorted(arguments)), tuple(sorted(expected))
+        if input_keys is not None and (keys != input_keys or outputs != output_keys):
+            raise GeneratedToolContractError("tests use inconsistent input or output fields")
+        input_keys, output_keys = keys, outputs
+        digest = json.dumps(arguments, sort_keys=True)
+        if digest in seen and seen[digest] != expected:
+            raise GeneratedToolContractError("the same input has conflicting expected outputs")
+        seen[digest] = expected
+        tests.append(GeneratedToolTest(deepcopy(arguments), deepcopy(expected), quote))
+    if not isinstance(final, dict) or tuple(sorted(final)) != input_keys:
+        raise GeneratedToolContractError("final invocation fields differ from test inputs")
+    return GeneratedToolContract(tuple(tests), deepcopy(final), quote, "owner_structured_contract")

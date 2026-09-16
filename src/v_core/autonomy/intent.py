@@ -60,6 +60,19 @@ _INTENT_RESPONSE_FORMAT: dict[str, Any] = {
                 "distinct_detail_page": {"type": "boolean"},
                 "artifact_fallback": {"type": "boolean"},
                 "execute_created_artifact": {"type": "boolean"},
+                "generated_tool_archetype": {
+                    "type": "string",
+                    "enum": ["none", "client_web_traffic_monitor"],
+                },
+                "generated_tool_archetype_evidence": {
+                    "type": "string",
+                    "maxLength": 200,
+                },
+                "delegates_test_target": {"type": "boolean"},
+                "delegates_test_target_evidence": {
+                    "type": "string",
+                    "maxLength": 200,
+                },
                 "recall_memory": {"type": "boolean"},
                 "memory_query": {"type": "string", "maxLength": 220},
                 "required_public_fields": {
@@ -100,6 +113,24 @@ _INTENT_RESPONSE_FORMAT: dict[str, Any] = {
                     "type": "string",
                     "maxLength": 160,
                 },
+                "tor_inventory_max_pages": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 20,
+                },
+                "tor_inventory_max_pages_evidence": {
+                    "type": "string",
+                    "maxLength": 160,
+                },
+                "tor_inventory_max_depth": {
+                    "type": "integer",
+                    "minimum": -1,
+                    "maximum": 3,
+                },
+                "tor_inventory_max_depth_evidence": {
+                    "type": "string",
+                    "maxLength": 160,
+                },
                 "web_query": {"type": "string", "maxLength": 220},
                 "language_scope": {
                     "type": "string",
@@ -119,6 +150,10 @@ _INTENT_RESPONSE_FORMAT: dict[str, Any] = {
                 "distinct_detail_page",
                 "artifact_fallback",
                 "execute_created_artifact",
+                "generated_tool_archetype",
+                "generated_tool_archetype_evidence",
+                "delegates_test_target",
+                "delegates_test_target_evidence",
                 "recall_memory",
                 "memory_query",
                 "required_public_fields",
@@ -128,6 +163,10 @@ _INTENT_RESPONSE_FORMAT: dict[str, Any] = {
                 "research_facet_evidence",
                 "minimum_detail_sources",
                 "minimum_detail_sources_evidence",
+                "tor_inventory_max_pages",
+                "tor_inventory_max_pages_evidence",
+                "tor_inventory_max_depth",
+                "tor_inventory_max_depth_evidence",
                 "web_query",
                 "language_scope",
                 "response_language",
@@ -136,6 +175,43 @@ _INTENT_RESPONSE_FORMAT: dict[str, Any] = {
         },
     },
 }
+
+
+_TOR_INVENTORY_LIMIT_RESPONSE_FORMAT: dict[str, Any] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "paladyn_tor_inventory_limits",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "max_pages": {"type": "integer", "minimum": 0, "maximum": 20},
+                "max_pages_evidence": {"type": "string", "maxLength": 160},
+                "max_depth": {"type": "integer", "minimum": -1, "maximum": 3},
+                "max_depth_evidence": {"type": "string", "maxLength": 160},
+            },
+            "required": [
+                "max_pages",
+                "max_pages_evidence",
+                "max_depth",
+                "max_depth_evidence",
+            ],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+_TOR_INVENTORY_LIMIT_SYSTEM_PROMPT = """
+You are PALADYN's language-independent crawl-limit reader. Read only the current
+owner message. Extract an explicit upper limit on the number of pages in an
+exact-site Tor inventory and an explicit maximum crawl depth. Convert number
+words in any language to integers. Return 0 for max_pages when no page limit is
+explicit and -1 for max_depth when no depth limit is explicit. For every
+non-default value, copy the shortest exact verbatim phrase containing both the
+limit and what it limits. Never infer depth from a page count or from a
+same-origin restriction. JSON only.
+""".strip()
 
 
 _INTENT_SYSTEM_PROMPT = """
@@ -150,6 +226,8 @@ Return exactly one JSON object with this shape:
 "creative_response":false,"capabilities":[],
 "requires_report":false,"distinct_detail_page":false,"artifact_fallback":false,
 "execute_created_artifact":false,
+"generated_tool_archetype":"none","generated_tool_archetype_evidence":"",
+"delegates_test_target":false,"delegates_test_target_evidence":"",
 "recall_memory":false,"memory_query":"",
 "required_public_fields":[],
 "public_field_evidence":{"address":"","contact":"","count":"","opening_hours":""},
@@ -158,6 +236,8 @@ Return exactly one JSON object with this shape:
 "research_facet_evidence":{"exhaustive_coverage":"","images":"",
 "item_descriptions":"","item_list":"","price":"","purchase_source":""},
 "minimum_detail_sources":0,"minimum_detail_sources_evidence":"",
+"tor_inventory_max_pages":0,"tor_inventory_max_pages_evidence":"",
+"tor_inventory_max_depth":-1,"tor_inventory_max_depth_evidence":"",
 "web_query":"","language_scope":"none","response_language":""}
 
 Allowed capability labels:
@@ -172,6 +252,10 @@ Allowed capability labels:
   metadata inspection only, not executing, testing, creating or repairing tools.
   For a request limited to reviewing tool descriptions, use ONLY tool_catalog;
   naming memory_recall or file_read as review subjects does not request their use.
+  Searching the Internet for information about tools is browser work, not
+  tool_catalog. "First research such tools online, then create them" requests
+  browser and learning_tool, with references_previous=true if the subject is
+  supplied by earlier dialogue. Preserve every explicitly requested stage.
 - browser: search, browse, inspect, collect, or navigate online information
 - file_read: inspect local files or directories
 - file_write: create, edit, move, rename, or delete local files
@@ -221,6 +305,8 @@ Rules:
   named in the current message. Never copy capabilities from an earlier task.
   In particular, a continuation is not runtime_review merely because the previous
   checkpoint or conversation mentioned a failure.
+  First authorizing an idea discussed in conversation is a new action with
+  references_previous=true; it does not require resuming an old execution.
 - requires_report is true when the user expects findings, extracted information,
   test results, or another evidence-backed answer.
 - distinct_detail_page is true only when online work explicitly requires opening
@@ -228,10 +314,25 @@ Rules:
 - artifact_fallback is true when creating a tool or skill is conditional on an
   earlier attempt failing or finding no suitable result. Keep the corresponding
   learning capability, but do not treat creation as unconditionally required.
-- execute_created_artifact is true when the user expects the newly created tool
-  or skill to be run, demonstrated, tested on an input, or to produce results.
+- execute_created_artifact is true when the user expects a created tool or skill
+  to be run, demonstrated, tested on an input, or to produce results. This also
+  includes a follow-up that refers to an earlier artifact indirectly, such as
+  "use that tool on this site"; in that case set references_previous=true and
+  do not add learning_tool unless the current message also requests a change.
   "Create it and show me the results" means true in every language. It is false
   when the user asks only to write, stage, validate, or activate the artifact.
+- generated_tool_archetype is client_web_traffic_monitor only when the user asks
+  to create a tool that observes or summarizes browser-visible website request
+  traffic. Interpret that meaning in any language. Otherwise use none.
+  generated_tool_archetype_evidence must be the shortest exact verbatim phrase
+  from current_user_message that names that function. Never translate or
+  paraphrase the evidence phrase.
+- delegates_test_target is true only when the user explicitly lets V choose,
+  select, decide, or invent the safe site or input used to test the newly
+  created tool. Interpret that delegation in any language.
+  delegates_test_target_evidence must be the shortest exact verbatim phrase
+  from current_user_message granting that choice. Never infer delegation from
+  a mere request to test the tool.
 - recall_memory is true only when the user explicitly asks V to remember, recall,
   revisit, continue from, or use information saved in an earlier conversation.
   Merely asking a new question on a similar domain is false. memory_query is a
@@ -268,6 +369,17 @@ Rules:
   and return 0 when no count is explicit. minimum_detail_sources_evidence is the
   shortest exact verbatim phrase containing that requested count and its noun.
   The integer is ignored unless this exact phrase occurs in current_user_message.
+- tor_inventory_max_pages is the explicit upper bound on pages to fetch during
+  an exact-site Tor inventory. Convert number words in any language to an
+  integer from 1 to 20. Return 0 when no page limit is explicit.
+  tor_inventory_max_pages_evidence is the shortest exact verbatim phrase that
+  contains both the limit and what it limits. The value is ignored unless that
+  phrase occurs in current_user_message.
+- tor_inventory_max_depth is the explicit crawl-depth limit for an exact-site
+  Tor inventory. Convert number words in any language to an integer from 0 to
+  3. Return -1 when no depth limit is explicit.
+  tor_inventory_max_depth_evidence follows the same exact-verbatim rule. Never
+  infer depth from a page count or from a same-domain constraint.
 - web_query is a short initial search-engine query only when browser work must
   discover sources. Preserve the user's concrete subject, but remove greetings,
   persona names, politeness, report formatting, and conditional fallback work. For
@@ -313,6 +425,10 @@ class SemanticIntent:
     distinct_detail_page: bool = False
     artifact_fallback: bool = False
     execute_created_artifact: bool = False
+    generated_tool_archetype: str = "none"
+    generated_tool_archetype_evidence: str = ""
+    delegates_test_target: bool = False
+    delegates_test_target_evidence: str = ""
     recall_memory: bool = False
     memory_query: str = ""
     required_public_fields: tuple[str, ...] = ()
@@ -322,6 +438,10 @@ class SemanticIntent:
     research_facet_evidence: tuple[tuple[str, str], ...] = ()
     minimum_detail_sources: int = 0
     minimum_detail_sources_evidence: str = ""
+    tor_inventory_max_pages: int = 0
+    tor_inventory_max_pages_evidence: str = ""
+    tor_inventory_max_depth: int = -1
+    tor_inventory_max_depth_evidence: str = ""
     web_query: str = ""
     language_scope: str = "none"
     response_language: str = ""
@@ -436,6 +556,30 @@ class SemanticIntent:
         )[:160]
         if not minimum_detail_sources_evidence:
             minimum_detail_sources = 0
+        try:
+            tor_inventory_max_pages = max(
+                0,
+                min(20, int(payload.get("tor_inventory_max_pages", 0) or 0)),
+            )
+        except (TypeError, ValueError):
+            tor_inventory_max_pages = 0
+        tor_inventory_max_pages_evidence = " ".join(
+            str(payload.get("tor_inventory_max_pages_evidence", "")).split()
+        )[:160]
+        if not tor_inventory_max_pages_evidence:
+            tor_inventory_max_pages = 0
+        try:
+            tor_inventory_max_depth = max(
+                -1,
+                min(3, int(payload.get("tor_inventory_max_depth", -1))),
+            )
+        except (TypeError, ValueError):
+            tor_inventory_max_depth = -1
+        tor_inventory_max_depth_evidence = " ".join(
+            str(payload.get("tor_inventory_max_depth_evidence", "")).split()
+        )[:160]
+        if not tor_inventory_max_depth_evidence:
+            tor_inventory_max_depth = -1
         language_scope = str(payload.get("language_scope", "none")).strip()
         if language_scope not in {"none", "turn", "persistent", "reset"}:
             language_scope = "none"
@@ -476,6 +620,21 @@ class SemanticIntent:
             execute_created_artifact=(
                 payload.get("execute_created_artifact") is True
             ),
+            generated_tool_archetype=(
+                str(payload.get("generated_tool_archetype", "none"))
+                if str(payload.get("generated_tool_archetype", "none"))
+                in {"none", "client_web_traffic_monitor"}
+                else "none"
+            ),
+            generated_tool_archetype_evidence=" ".join(
+                str(payload.get("generated_tool_archetype_evidence", "")).split()
+            )[:200],
+            delegates_test_target=(
+                payload.get("delegates_test_target") is True
+            ),
+            delegates_test_target_evidence=" ".join(
+                str(payload.get("delegates_test_target_evidence", "")).split()
+            )[:200],
             recall_memory=recall_memory,
             memory_query=memory_query,
             required_public_fields=public_fields,
@@ -485,6 +644,10 @@ class SemanticIntent:
             research_facet_evidence=research_facet_evidence,
             minimum_detail_sources=minimum_detail_sources,
             minimum_detail_sources_evidence=minimum_detail_sources_evidence,
+            tor_inventory_max_pages=tor_inventory_max_pages,
+            tor_inventory_max_pages_evidence=tor_inventory_max_pages_evidence,
+            tor_inventory_max_depth=tor_inventory_max_depth,
+            tor_inventory_max_depth_evidence=tor_inventory_max_depth_evidence,
             web_query=web_query,
             language_scope=language_scope,
             response_language=response_language,
@@ -496,6 +659,7 @@ class SemanticIntent:
         interactive_tor = bool(prompt) and TaskContract.requests_interactive_tor_browser(
             prompt
         )
+        tor_inventory = bool(prompt) and TaskContract.requests_tor_inventory(prompt)
         browser = "browser" in capabilities and not tor
         public_fields = self.required_public_fields
         if browser and self.requires_report and not public_fields:
@@ -550,18 +714,37 @@ class SemanticIntent:
             ),
             allows_artifact_fallback=self.artifact_fallback,
             requires_runtime_review="runtime_review" in capabilities,
+            requires_tor_candidate_verification=(
+                tor
+                and not re.search(
+                    r"https?://(?:[a-z0-9-]+\.)*[a-z2-7]{56}\.onion",
+                    prompt,
+                    re.IGNORECASE,
+                )
+                and self.requires_report
+            ),
+            tor_inventory_max_pages=(
+                self.tor_inventory_max_pages if tor_inventory else 0
+            ),
+            tor_inventory_max_depth=(
+                self.tor_inventory_max_depth if tor_inventory else -1
+            ),
             required_tools=(
                 (
                     "full_tor_browser_inventory"
                     if interactive_tor
                     else (
-                        "full_tor_fetch"
-                        if re.search(
-                            r"https?://(?:[a-z0-9-]+\.)*[a-z2-7]{56}\.onion",
-                            prompt,
-                            re.IGNORECASE,
+                        "full_tor_inventory"
+                        if tor_inventory
+                        else (
+                            "full_tor_fetch"
+                            if re.search(
+                                r"https?://(?:[a-z0-9-]+\.)*[a-z2-7]{56}\.onion",
+                                prompt,
+                                re.IGNORECASE,
+                            )
+                            else "full_tor_search"
                         )
-                        else "full_tor_search"
                     )
                 ),
             )
@@ -572,13 +755,17 @@ class SemanticIntent:
                     "network.tor.browser"
                     if interactive_tor
                     else (
-                        "network.tor.fetch"
-                        if re.search(
-                            r"https?://(?:[a-z0-9-]+\.)*[a-z2-7]{56}\.onion",
-                            prompt,
-                            re.IGNORECASE,
+                        "network.tor.inventory"
+                        if tor_inventory
+                        else (
+                            "network.tor.fetch"
+                            if re.search(
+                                r"https?://(?:[a-z0-9-]+\.)*[a-z2-7]{56}\.onion",
+                                prompt,
+                                re.IGNORECASE,
+                            )
+                            else "network.tor.search"
                         )
-                        else "network.tor.search"
                     )
                 ),
             )
@@ -698,12 +885,13 @@ class MultilingualIntentRouter:
         intent: SemanticIntent | None,
         prompt: str,
     ) -> SemanticIntent | None:
-        """Require owner-text evidence for every model-proposed public field.
+        """Ground model-proposed public fields and crawl limits in owner text.
 
         The semantic reader may understand any language, but it may not enlarge
         the task by guessing that a product search also needs addresses, phone
-        numbers, opening hours, or a location count. Exact evidence spans keep
-        multilingual interpretation available without trusting bare labels.
+        numbers, opening hours, a location count, or a larger Tor crawl budget.
+        Exact evidence spans keep multilingual interpretation available without
+        trusting bare labels.
         """
 
         if intent is None:
@@ -713,6 +901,10 @@ class MultilingualIntentRouter:
             if "browser" in intent.capabilities
             else set()
         )
+        # The classifier receives no prior subject. A referential query must be
+        # resolved separately against owner dialogue before any search runs.
+        if intent.references_previous or "browser" not in intent.capabilities:
+            intent = replace(intent, web_query="")
         normalized_prompt = " ".join(prompt.casefold().split())
         # Evidence spans remain useful diagnostics, but field labels proposed
         # by the same fallible model are not authorization to enlarge the task.
@@ -758,12 +950,30 @@ class MultilingualIntentRouter:
             and source_count_evidence in normalized_prompt
             else 0
         )
+        tor_pages_evidence = " ".join(
+            intent.tor_inventory_max_pages_evidence.casefold().split()
+        )
+        grounded_tor_max_pages = (
+            intent.tor_inventory_max_pages
+            if tor_pages_evidence and tor_pages_evidence in normalized_prompt
+            else 0
+        )
+        tor_depth_evidence = " ".join(
+            intent.tor_inventory_max_depth_evidence.casefold().split()
+        )
+        grounded_tor_max_depth = (
+            intent.tor_inventory_max_depth
+            if tor_depth_evidence and tor_depth_evidence in normalized_prompt
+            else -1
+        )
         subject = intent.public_subject if ordered else ""
         if (
             ordered == intent.required_public_fields
             and subject == intent.public_subject
             and grounded_research_facets_ordered == intent.research_facets
             and grounded_minimum_detail_sources == intent.minimum_detail_sources
+            and grounded_tor_max_pages == intent.tor_inventory_max_pages
+            and grounded_tor_max_depth == intent.tor_inventory_max_depth
         ):
             return intent
         self.last_sanitization_reason = ",".join(
@@ -783,6 +993,88 @@ class MultilingualIntentRouter:
             minimum_detail_sources_evidence=(
                 intent.minimum_detail_sources_evidence
                 if grounded_minimum_detail_sources
+                else ""
+            ),
+            tor_inventory_max_pages=grounded_tor_max_pages,
+            tor_inventory_max_pages_evidence=(
+                intent.tor_inventory_max_pages_evidence
+                if grounded_tor_max_pages
+                else ""
+            ),
+            tor_inventory_max_depth=grounded_tor_max_depth,
+            tor_inventory_max_depth_evidence=(
+                intent.tor_inventory_max_depth_evidence
+                if grounded_tor_max_depth >= 0
+                else ""
+            ),
+        )
+
+    def _ground_generated_tool_delegation(
+        self,
+        intent: SemanticIntent | None,
+        prompt: str,
+    ) -> SemanticIntent | None:
+        """Ground multilingual test delegation in exact current-turn text.
+
+        The model may understand the owner's language, while runtime code owns
+        the allowed archetype and independent test oracle.  Exact evidence
+        spans prevent prior context or a model guess from silently authorizing
+        an autonomous test target.
+        """
+
+        if intent is None:
+            return None
+        archetype_grounded = bool(
+            intent.generated_tool_archetype == "client_web_traffic_monitor"
+            and "learning_tool" in intent.capabilities
+            and intent.generated_tool_archetype_evidence
+            and self._text_grounded_in_current_message(
+                intent.generated_tool_archetype_evidence,
+                prompt,
+            )
+        )
+        delegation_grounded = bool(
+            intent.delegates_test_target
+            and intent.execute_created_artifact
+            and intent.delegates_test_target_evidence
+            and self._text_grounded_in_current_message(
+                intent.delegates_test_target_evidence,
+                prompt,
+            )
+        )
+        if archetype_grounded and delegation_grounded:
+            return intent
+        if (
+            intent.generated_tool_archetype == "none"
+            and not intent.delegates_test_target
+        ):
+            return intent
+        self.last_sanitization_reason = ",".join(
+            item
+            for item in (
+                self.last_sanitization_reason,
+                "ungrounded_generated_tool_delegation",
+            )
+            if item
+        )
+        return replace(
+            intent,
+            generated_tool_archetype=(
+                intent.generated_tool_archetype
+                if archetype_grounded
+                else "none"
+            ),
+            generated_tool_archetype_evidence=(
+                intent.generated_tool_archetype_evidence
+                if archetype_grounded
+                else ""
+            ),
+            delegates_test_target=(
+                intent.delegates_test_target if delegation_grounded else False
+            ),
+            delegates_test_target_evidence=(
+                intent.delegates_test_target_evidence
+                if delegation_grounded
                 else ""
             ),
         )
@@ -824,6 +1116,16 @@ class MultilingualIntentRouter:
             return False
         prompt_contract = TaskContract.from_prompt(prompt)
         capabilities = set(intent.capabilities)
+        if capabilities and capabilities <= {"tool_catalog", "tool_self_test"}:
+            # An inventory/health-check shortcut cannot satisfy independent
+            # operations explicitly required by the owner's current message.
+            if any((
+                prompt_contract.requires_browser_navigation,
+                prompt_contract.requires_file_mutation,
+                prompt_contract.requires_created_tool,
+                prompt_contract.requires_created_skill,
+            )):
+                return False
         if not intent.continue_previous and (
             not MultilingualIntentRouter._text_grounded_in_current_message(
                 intent.public_subject, prompt
@@ -849,6 +1151,7 @@ class MultilingualIntentRouter:
             "browser" in capabilities
             and TaskContract.needs_web_discovery(prompt)
             and not intent.web_query
+            and not intent.references_previous
         ):
             return False
         return True
@@ -870,6 +1173,59 @@ class MultilingualIntentRouter:
                 )
             )
         )
+
+    async def extract_tor_inventory_limits(
+        self,
+        prompt: str,
+    ) -> tuple[int, int] | None:
+        """Read only crawl budgets through a compact multilingual contract.
+
+        Exact onion inventory already has a deterministic execution route. It
+        must not depend on the much larger general intent schema merely to keep
+        an owner-stated page or depth ceiling. A malformed answer fails closed;
+        callers must not fall through to the provider's larger defaults.
+        """
+
+        response = await self.llm.ask(
+            messages=[
+                {"role": "system", "content": _TOR_INVENTORY_LIMIT_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {"current_owner_message": prompt},
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+            max_tokens=96,
+            temperature=0.0,
+            response_format=_TOR_INVENTORY_LIMIT_RESPONSE_FORMAT,
+        )
+        payload = parse_llm_json(response, default={})
+        if not isinstance(payload, dict) or not payload:
+            return None
+        try:
+            max_pages = int(payload.get("max_pages", 0))
+            max_depth = int(payload.get("max_depth", -1))
+        except (TypeError, ValueError):
+            return None
+        if not 0 <= max_pages <= 20 or not -1 <= max_depth <= 3:
+            return None
+
+        normalized_prompt = " ".join(prompt.casefold().split())
+        pages_evidence = " ".join(
+            str(payload.get("max_pages_evidence", "")).casefold().split()
+        )
+        depth_evidence = " ".join(
+            str(payload.get("max_depth_evidence", "")).casefold().split()
+        )
+        if max_pages > 0:
+            if not pages_evidence or pages_evidence not in normalized_prompt:
+                return None
+        if max_depth >= 0:
+            if not depth_evidence or depth_evidence not in normalized_prompt:
+                return None
+        return max_pages, max_depth
 
     async def classify(
         self,
@@ -909,9 +1265,12 @@ class MultilingualIntentRouter:
         )
         self.last_response = response
         intent = self._ground_public_fields(
-            self._ground_local_file_capabilities(
-                self._ground_runtime_review(
-                    SemanticIntent.parse(response),
+            self._ground_generated_tool_delegation(
+                self._ground_local_file_capabilities(
+                    self._ground_runtime_review(
+                        SemanticIntent.parse(response),
+                        prompt,
+                    ),
                     prompt,
                 ),
                 prompt,
@@ -939,7 +1298,11 @@ class MultilingualIntentRouter:
                 {
                     "role": "user",
                     "content": (
-                        "That output did not match the required JSON schema. "
+                        "That classification was invalid or contradicted the "
+                        "current request. Recheck each requested operation: "
+                        "online research needs browser; creation needs learning_tool "
+                        "or learning_skill. A catalog review cannot replace them. "
+                        "Do not add operations absent from the request. "
                         "Classify the same user data again. JSON only."
                     ),
                 },
@@ -950,9 +1313,12 @@ class MultilingualIntentRouter:
         )
         self.last_response = retry
         retried_intent = self._ground_public_fields(
-            self._ground_local_file_capabilities(
-                self._ground_runtime_review(
-                    SemanticIntent.parse(retry),
+            self._ground_generated_tool_delegation(
+                self._ground_local_file_capabilities(
+                    self._ground_runtime_review(
+                        SemanticIntent.parse(retry),
+                        prompt,
+                    ),
                     prompt,
                 ),
                 prompt,

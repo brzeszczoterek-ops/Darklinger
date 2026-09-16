@@ -18,7 +18,7 @@ from ..tool_recovery import capabilities_for_tool, normalize_capabilities
 _ONLINE_ACTION = re.compile(
     r"\b(?:aggregate|browse|check|collect|extract|find|gather|inspect|list|log\s+in|look\s+for|monitor|open|"
     r"register|research|scan|search|visit|crawl|scrape|"
-    r"ekstrakc\w*|gromad\w*|monitor\w*|przejr\w*|przeszuk\w*|sprawd\w*|szuk\w*|wejd\w*|"
+    r"ekstrakc\w*|gromad\w*|monitor\w*|przejr\w*|przeszuk\w*|sprawd\w*|(?:po)?szuk\w*|wejd\w*|"
     r"wej[śsćc]\w*|wyszuk\w*|wyciagn\w*|wyciągn\w*|zalog\w*|za[łl]o[żz]\w*|"
     r"zbier\w*|znajd\w*)\b",
     re.IGNORECASE,
@@ -50,8 +50,13 @@ _EXPLICIT_ONION_ADDRESS = re.compile(
 )
 _TOR_INTERACTIVE_BROWSER = re.compile(
     r"\b(?:captcha|kapcza|kapczę|kapcze|private\s+window|private\s+browser|"
-    r"prywatn\w*\s+okn\w*|javascript|java\s*script|bez\s+ja(?:vy|wy)|"
-    r"inwentaryz\w*|inventory|interactive\s+browser|browser\s+session)\b",
+    r"prywatn\w*\s+okn\w*|"
+    r"interactive\s+browser|browser\s+session)\b",
+    re.IGNORECASE,
+)
+_TOR_SITE_INVENTORY = re.compile(
+    r"\b(?:crawl|crawler|inventory|map\s+(?:the\s+)?site|site\s+map|"
+    r"z?inwentaryz\w*|map\w*\s+stron\w*|katalog\w*\s+stron\w*)\b",
     re.IGNORECASE,
 )
 _EXPLICIT_WEB_ADDRESS = re.compile(
@@ -78,6 +83,23 @@ _CREATE_SKILL = re.compile(
     r"\b(?:create|build|implement|write|generate|stworz|stwórz|utworz|utwórz|zbuduj|napisz|"
     r"wygeneruj|zaimplementuj)\w*\b(?:(?![.!?;\n]).){0,180}?\b"
     r"(?:skill\w*|umiejetn\w*|umiejętn\w*)\b",
+    re.IGNORECASE,
+)
+_CAPABILITY_QUESTION_PREFIX = re.compile(
+    r"(?:\b(?:tell\s+me\s+(?:whether|if)\s+)?(?:are\s+you\s+able\s+to|"
+    r"do\s+you\s+know\s+how\s+to|can\s+you\s+even|"
+    r"what\s+(?:can|could)\s+you)\b|"
+    r"\b(?:powiedz\s+mi\s*,?\s*)?czy\s+(?:(?:ty|v)\s+)?"
+    r"(?:w\s+og[oó]le\s+)?(?:potraf\w*|um(?:iesz|ie\w*|ia\w*)|"
+    r"(?:jeste\w*|by[łl]\w*)\s+w\s+stanie)\b)",
+    re.IGNORECASE,
+)
+_CREATION_TOPIC = re.compile(
+    r"\b(?:create|build|implement|write|generate|creating|building|"
+    r"stworz|stwórz|tworz|utworz|utwórz|zbuduj|napisz|wygeneruj|"
+    r"zaimplementuj)\w*\b(?:(?![.!?;\n]).){0,180}?\b"
+    r"(?:tool\w*|narzedzi\w*|narzędzi\w*|skill\w*|"
+    r"umiejetn\w*|umiejętn\w*)\b",
     re.IGNORECASE,
 )
 _ARTIFACT_DISJUNCTION = re.compile(
@@ -153,6 +175,37 @@ def _search_outside_quoted_text(
     for match in pattern.finditer(prompt):
         if not any(start <= match.start() < end for start, end in quoted_spans):
             return match
+    return None
+
+
+def _capability_question_spans(prompt: str) -> list[tuple[int, int]]:
+    """Return question clauses that ask about ability rather than execution."""
+
+    spans: list[tuple[int, int]] = []
+    for match in _CAPABILITY_QUESTION_PREFIX.finditer(prompt):
+        endings = [
+            index
+            for marker in (".", "?", "!", ";", "\n")
+            if (index := prompt.find(marker, match.end())) >= 0
+        ]
+        end = min(endings) + 1 if endings else len(prompt)
+        spans.append((match.start(), end))
+    return spans
+
+
+def _search_actionable_creation(
+    pattern: re.Pattern[str], prompt: str
+) -> re.Match[str] | None:
+    """Ignore quoted fixtures and creation mentioned only as a capability question."""
+
+    quoted_spans = [match.span() for match in _QUOTED_TEXT.finditer(prompt)]
+    capability_spans = _capability_question_spans(prompt)
+    for match in pattern.finditer(prompt):
+        if any(start <= match.start() < end for start, end in quoted_spans):
+            continue
+        if any(start <= match.start() < end for start, end in capability_spans):
+            continue
+        return match
     return None
 _READ_FILE = re.compile(
     r"\b(?:analy[sz]\w*|cat|inspect|open|read|review|show|"
@@ -560,6 +613,9 @@ class TaskContract:
     requires_created_artifact: bool = False
     allows_artifact_fallback: bool = False
     requires_runtime_review: bool = False
+    requires_tor_candidate_verification: bool = False
+    tor_inventory_max_pages: int = 0
+    tor_inventory_max_depth: int = -1
     required_tools: tuple[str, ...] = ()
     required_capabilities: tuple[str, ...] = ()
     required_public_fields: tuple[str, ...] = ()
@@ -567,6 +623,10 @@ class TaskContract:
     required_research_facets: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        if not 0 <= self.tor_inventory_max_pages <= 20:
+            raise ValueError("tor_inventory_max_pages must be 0 or from 1 to 20")
+        if not -1 <= self.tor_inventory_max_depth <= 3:
+            raise ValueError("tor_inventory_max_depth must be -1 or from 0 to 3")
         # A model-side semantic classifier may independently mark both builder
         # capabilities even when the owner's structural wording explicitly
         # offered them as alternatives. Preserve the owner's OR contract: one
@@ -649,6 +709,8 @@ class TaskContract:
             requires_web_discovery=False,
             requires_distinct_detail_page=False,
             minimum_detail_sources=0,
+            tor_inventory_max_pages=0,
+            tor_inventory_max_depth=-1,
             required_tools=tuple(
                 name
                 for name in self.required_tools
@@ -656,6 +718,7 @@ class TaskContract:
                 not in {
                     "full_tor_search",
                     "full_tor_fetch",
+                    "full_tor_inventory",
                     "full_tor_browser_inventory",
                     "full_tor_browser_close",
                 }
@@ -679,6 +742,24 @@ class TaskContract:
         )
 
     @staticmethod
+    def asks_about_creation_capability(prompt: str) -> bool:
+        """Return true for a pure ability question about creating tools or skills."""
+
+        capability_spans = _capability_question_spans(prompt)
+        if not capability_spans:
+            return False
+        discussed = any(
+            start <= match.start() < end
+            for match in _CREATION_TOPIC.finditer(prompt)
+            for start, end in capability_spans
+        )
+        return bool(
+            discussed
+            and _search_actionable_creation(_CREATE_TOOL, prompt) is None
+            and _search_actionable_creation(_CREATE_SKILL, prompt) is None
+        )
+
+    @staticmethod
     def requests_interactive_tor_browser(prompt: str) -> bool:
         """Return whether Tor work needs a persistent owner-assisted session."""
 
@@ -686,6 +767,17 @@ class TaskContract:
             TaskContract.prefers_tor(prompt)
             and _EXPLICIT_ONION_ADDRESS.search(prompt)
             and _TOR_INTERACTIVE_BROWSER.search(prompt)
+        )
+
+    @staticmethod
+    def requests_tor_inventory(prompt: str) -> bool:
+        """Return whether an exact onion target needs a passive site inventory."""
+
+        return bool(
+            TaskContract.prefers_tor(prompt)
+            and _EXPLICIT_ONION_ADDRESS.search(prompt)
+            and _TOR_SITE_INVENTORY.search(prompt)
+            and not TaskContract.requests_interactive_tor_browser(prompt)
         )
 
     @staticmethod
@@ -770,6 +862,7 @@ class TaskContract:
             or bool(_EXPLICIT_ONION_ADDRESS.search(prompt))
         )
         interactive_tor = tor_requested and cls.requests_interactive_tor_browser(prompt)
+        tor_inventory = tor_requested and cls.requests_tor_inventory(prompt)
         online = not tor_requested and not web_disabled and (
             requests_web_access(prompt)
             or bool(_ONLINE_ACTION.search(prompt) and _ONLINE_RESOURCE.search(prompt))
@@ -826,8 +919,8 @@ class TaskContract:
         command_execution = bool(
             not online and _requests_command_execution(prompt)
         )
-        tool_creation_match = _search_outside_quoted_text(_CREATE_TOOL, prompt)
-        skill_creation_match = _search_outside_quoted_text(_CREATE_SKILL, prompt)
+        tool_creation_match = _search_actionable_creation(_CREATE_TOOL, prompt)
+        skill_creation_match = _search_actionable_creation(_CREATE_SKILL, prompt)
         creation_matches = [
             match
             for match in (tool_creation_match, skill_creation_match)
@@ -919,14 +1012,23 @@ class TaskContract:
             requires_created_artifact=artifact_disjunction,
             allows_artifact_fallback=conditional_artifact,
             requires_runtime_review=runtime_review,
+            requires_tor_candidate_verification=(
+                tor_requested
+                and not _EXPLICIT_ONION_ADDRESS.search(prompt)
+                and evidence_report
+            ),
             required_tools=(
                 (
                     "full_tor_browser_inventory"
                     if interactive_tor
                     else (
-                        "full_tor_fetch"
-                        if _EXPLICIT_ONION_ADDRESS.search(prompt)
-                        else "full_tor_search"
+                        "full_tor_inventory"
+                        if tor_inventory
+                        else (
+                            "full_tor_fetch"
+                            if _EXPLICIT_ONION_ADDRESS.search(prompt)
+                            else "full_tor_search"
+                        )
                     )
                 ),
             )
@@ -937,9 +1039,13 @@ class TaskContract:
                     "network.tor.browser"
                     if interactive_tor
                     else (
-                        "network.tor.fetch"
-                        if _EXPLICIT_ONION_ADDRESS.search(prompt)
-                        else "network.tor.search"
+                        "network.tor.inventory"
+                        if tor_inventory
+                        else (
+                            "network.tor.fetch"
+                            if _EXPLICIT_ONION_ADDRESS.search(prompt)
+                            else "network.tor.search"
+                        )
                     )
                 ),
             )
@@ -964,6 +1070,8 @@ class TaskContract:
             *tuple_fields,
             "minimum_detail_sources",
             "required_public_subject",
+            "tor_inventory_max_pages",
+            "tor_inventory_max_depth",
         }
         flags = {
             name: bool(source.get(name, False))
@@ -1022,6 +1130,14 @@ class TaskContract:
                 0,
                 min(8, int(source.get("minimum_detail_sources", 0) or 0)),
             ),
+            tor_inventory_max_pages=max(
+                0,
+                min(20, int(source.get("tor_inventory_max_pages", 0) or 0)),
+            ),
+            tor_inventory_max_depth=max(
+                -1,
+                min(3, int(source.get("tor_inventory_max_depth", -1))),
+            ),
             required_tools=required_tools,
             required_capabilities=required_capabilities,
             required_public_fields=required_public_fields,
@@ -1045,6 +1161,8 @@ class TaskContract:
             *tuple_fields,
             "minimum_detail_sources",
             "required_public_subject",
+            "tor_inventory_max_pages",
+            "tor_inventory_max_depth",
         }
         flags = {
             name: bool(getattr(self, name) or getattr(other, name))
@@ -1075,6 +1193,28 @@ class TaskContract:
             minimum_detail_sources=max(
                 self.minimum_detail_sources,
                 other.minimum_detail_sources,
+            ),
+            tor_inventory_max_pages=min(
+                (
+                    value
+                    for value in (
+                        self.tor_inventory_max_pages,
+                        other.tor_inventory_max_pages,
+                    )
+                    if value > 0
+                ),
+                default=0,
+            ),
+            tor_inventory_max_depth=min(
+                (
+                    value
+                    for value in (
+                        self.tor_inventory_max_depth,
+                        other.tor_inventory_max_depth,
+                    )
+                    if value >= 0
+                ),
+                default=-1,
             ),
             required_tools=required_tools,
             required_capabilities=required_capabilities,
@@ -1127,6 +1267,10 @@ class TaskContract:
         created_tool_index = -1
         for index, call in enumerate(succeeded):
             if call.get("tool") not in tool_builders:
+                continue
+            if call.get("created_tool_name"):
+                created_tool_name = str(call["created_tool_name"])
+                created_tool_index = index
                 continue
             try:
                 payload = json.loads(str(call.get("result_excerpt", "")))
@@ -1371,6 +1515,40 @@ class TaskContract:
             missing.append("learning_create_tool_or_skill")
         if self.requires_runtime_review and "runtime_review_task" not in names:
             missing.append("runtime_review_task")
+
+        if self.requires_tor_candidate_verification:
+            for search_index, call in enumerate(succeeded):
+                if call.get("tool") != "full_tor_search":
+                    continue
+                try:
+                    payload = json.loads(str(call.get("result_excerpt", "")))
+                except (TypeError, json.JSONDecodeError):
+                    missing.append("full_tor_search:structured_evidence")
+                    break
+                if not isinstance(payload, dict):
+                    missing.append("full_tor_search:structured_evidence")
+                    break
+                candidates = [
+                    str(item)
+                    for item in payload.get("onion_results", [])
+                    if isinstance(item, str) and item
+                ]
+                if not candidates:
+                    break
+                candidate_keys = {
+                    key for key in (_grounding_url_key(item) for item in candidates) if key
+                }
+                verified = any(
+                    later_index > search_index
+                    and later.get("tool") in {"full_tor_fetch", "full_tor_inventory"}
+                    and isinstance(later.get("arguments"), dict)
+                    and _grounding_url_key(str(later["arguments"].get("url", "")))
+                    in candidate_keys
+                    for later_index, later in enumerate(succeeded)
+                )
+                if not verified:
+                    missing.append("full_tor_fetch:candidate_verification")
+                break
         for required_tool in self.required_tools:
             required_tool_capabilities = set(capabilities_for_tool(required_tool))
             observed_capabilities = {
@@ -1564,6 +1742,7 @@ class TaskContract:
                 "runtime_review_task",
                 "full_tor_search",
                 "full_tor_fetch",
+                "full_tor_inventory",
                 "full_tor_browser_inventory",
             }
             and call.get("result_excerpt")
@@ -1579,6 +1758,7 @@ class TaskContract:
             in {
                 "full_tor_search",
                 "full_tor_fetch",
+                "full_tor_inventory",
                 "full_tor_browser_inventory",
             }
             for name in self.required_tools
@@ -1739,8 +1919,123 @@ class TaskContract:
             return ["answer:not_grounded_in_tool_evidence"]
         return []
 
-    def deterministic_answer(self, calls: list[dict[str, Any]]) -> str | None:
+    def deterministic_answer(
+        self,
+        calls: list[dict[str, Any]],
+        *,
+        language: str = "English",
+    ) -> str | None:
         """Produce exact results for objectives that require no model judgment."""
+
+        if "full_tor_inventory" in self.required_tools:
+            for call in reversed(calls):
+                if (
+                    call.get("status", "succeeded") != "succeeded"
+                    or call.get("tool") != "full_tor_inventory"
+                ):
+                    continue
+                try:
+                    payload = json.loads(str(call.get("result_excerpt", "")))
+                except (TypeError, json.JSONDecodeError):
+                    return None
+                if not isinstance(payload, dict):
+                    return None
+                records = payload.get("records", [])
+                if not isinstance(records, list):
+                    return None
+                polish = "pol" in language.casefold()
+                observed = int(payload.get("pages_observed", len(records)) or 0)
+                succeeded = int(payload.get("pages_succeeded", 0) or 0)
+                failed = int(payload.get("pages_failed", 0) or 0)
+                coverage = str(payload.get("coverage", "unknown"))
+                budget = bool(payload.get("budget_exhausted"))
+                timed_out = bool(payload.get("timed_out"))
+                if polish:
+                    lines = [
+                        "Gotowe. Pasywna inwentaryzacja Tor zakończona.",
+                        "",
+                        f"Zakres: {payload.get('seed_url', '')}",
+                        (
+                            f"Pokrycie: {coverage}; zaobserwowano {observed} stron, "
+                            f"{succeeded} odczytano poprawnie, {failed} zakończyło się błędem."
+                        ),
+                        (
+                            f"Limity: maksymalnie {payload.get('max_pages', '?')} stron, "
+                            f"głębokość {payload.get('max_depth', '?')}."
+                        ),
+                        (
+                            "Wykonanie: JavaScript wyłączony; formularze nie były wysyłane; "
+                            "nie użyto danych logowania; przekierowania wyłączone."
+                        ),
+                    ]
+                    if budget:
+                        lines.append("Przerwano zgodnie z ustawionym limitem stron.")
+                    if timed_out:
+                        lines.append("Upłynął limit czasu; wynik jest częściowy.")
+                    lines.extend(["", "Zaobserwowane strony:"])
+                    for number, record in enumerate(records, start=1):
+                        if not isinstance(record, dict):
+                            continue
+                        title = str(record.get("title", "")).strip() or "bez tytułu"
+                        status = int(record.get("status", 0) or 0)
+                        lines.append(
+                            f"{number}. {title} — HTTP {status or '?'} — "
+                            f"{record.get('url', '')}"
+                        )
+                    lines.extend(
+                        [
+                            "",
+                            (
+                                "Granica dowodu: raport potwierdza wyłącznie pasywne odczyty GET "
+                                "z wymienionych adresów. Nie dowodzi bezpieczeństwa serwisu, jego "
+                                "właściciela ani treści poza zaobserwowanymi stronami."
+                            ),
+                        ]
+                    )
+                    return "\n".join(lines)
+
+                lines = [
+                    "Done. The passive Tor inventory is complete.",
+                    "",
+                    f"Scope: {payload.get('seed_url', '')}",
+                    (
+                        f"Coverage: {coverage}; {observed} pages observed, "
+                        f"{succeeded} succeeded, {failed} failed."
+                    ),
+                    (
+                        f"Limits: at most {payload.get('max_pages', '?')} pages, "
+                        f"depth {payload.get('max_depth', '?')}."
+                    ),
+                    (
+                        "Execution: JavaScript disabled; no forms submitted; no credentials "
+                        "used; redirects disabled."
+                    ),
+                ]
+                if budget:
+                    lines.append("Stopped at the requested page budget.")
+                if timed_out:
+                    lines.append("The time limit expired, so coverage is partial.")
+                lines.extend(["", "Observed pages:"])
+                for number, record in enumerate(records, start=1):
+                    if not isinstance(record, dict):
+                        continue
+                    title = str(record.get("title", "")).strip() or "untitled"
+                    status = int(record.get("status", 0) or 0)
+                    lines.append(
+                        f"{number}. {title} — HTTP {status or '?'} — "
+                        f"{record.get('url', '')}"
+                    )
+                lines.extend(
+                    [
+                        "",
+                        (
+                            "Evidence boundary: this report confirms only passive GET observations "
+                            "from the listed URLs. It does not establish site safety, ownership, or "
+                            "content outside the observed pages."
+                        ),
+                    ]
+                )
+                return "\n".join(lines)
 
         if self.requires_created_tool_execution:
             builders = {

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import json
 import re
 from urllib.parse import urlsplit
 
 
 _FULL_URL = re.compile(r"https?://[^\s<>]+", re.IGNORECASE)
 _BARE_DOMAIN = re.compile(
-    r"(?<![@\w])"
+    # Do not treat dotted JSON/Python field names (``request.url``) as web
+    # targets when they are embedded in quoted task data. Full URLs remain
+    # accepted by the dedicated matcher above.
+    r"(?<![@\w\"'])"
     r"(?:www\.)?"
     r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
     r"[a-z]{2,63}"
@@ -51,6 +55,18 @@ _SPOKEN_URL_TOKEN = re.compile(
     r"https?|[^\W_]+|[:/.-]",
     re.IGNORECASE | re.UNICODE,
 )
+
+
+def _embedded_contract_spans(prompt: str) -> tuple[tuple[int, int], ...]:
+    """Locate JSON carried as tool input so its example URLs stay data."""
+    spans: list[tuple[int, int]] = []
+    for marker in re.finditer(r"(?<![\w.])tool_contract\s*=\s*", prompt):
+        try:
+            _, end = json.JSONDecoder().raw_decode(prompt[marker.end():])
+        except (TypeError, ValueError):
+            continue
+        spans.append((marker.start(), marker.end() + end))
+    return tuple(spans)
 
 
 def _extract_spoken_web_target(prompt: str) -> str | None:
@@ -128,7 +144,10 @@ def extract_web_targets(prompt: str) -> tuple[str, ...]:
 
     candidates: list[tuple[int, str]] = []
     full_spans: list[tuple[int, int]] = []
+    embedded = _embedded_contract_spans(prompt)
     for match in _FULL_URL.finditer(prompt):
+        if any(start <= match.start() < end for start, end in embedded):
+            continue
         full_spans.append(match.span())
         target = match.group(0).rstrip(").,;]}\"'")
         if target:
@@ -136,9 +155,16 @@ def extract_web_targets(prompt: str) -> tuple[str, ...]:
 
     for match in _BARE_DOMAIN.finditer(prompt):
         start, end = match.span()
+        if any(span_start <= start < span_end for span_start, span_end in embedded):
+            continue
         if any(start < full_end and end > full_start for full_start, full_end in full_spans):
             continue
         target = match.group(0).rstrip(").,;]}\"'")
+        if target.rsplit(".", 1)[-1].casefold() in {
+            "entries", "url", "status", "version", "method", "request",
+            "response", "json",
+        }:
+            continue
         normalized = f"https://{target}"
         if target:
             candidates.append((start, normalized))
@@ -160,6 +186,10 @@ def extract_web_target(prompt: str) -> str | None:
 
 
 def requests_web_access(prompt: str) -> bool:
-    if _FULL_URL.search(prompt) or _extract_spoken_web_target(prompt) is not None:
+    embedded = _embedded_contract_spans(prompt)
+    if any(
+        not any(start <= match.start() < end for start, end in embedded)
+        for match in _FULL_URL.finditer(prompt)
+    ) or _extract_spoken_web_target(prompt) is not None:
         return True
-    return bool(_WEB_INTENT.search(prompt) and _BARE_DOMAIN.search(prompt))
+    return bool(_WEB_INTENT.search(prompt) and extract_web_targets(prompt))

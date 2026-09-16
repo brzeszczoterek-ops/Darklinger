@@ -63,7 +63,12 @@ def classify_model_task(prompt: str, contract: TaskContract | None = None) -> st
             task_contract.requires_web_discovery,
             task_contract.requires_distinct_detail_page,
             any(
-                name in {"full_tor_search", "full_tor_fetch"}
+                name in {
+                    "full_tor_search",
+                    "full_tor_fetch",
+                    "full_tor_inventory",
+                    "full_tor_browser_inventory",
+                }
                 for name in task_contract.required_tools
             ),
         )
