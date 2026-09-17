@@ -1,10 +1,10 @@
 abi <abi/4.0>,
 include <tunables/global>
 
-# PALADYN uses Bubblewrap for generated-code isolation. Ubuntu's restricted
+# DARKLINGER uses Bubblewrap for generated-code isolation. Ubuntu's restricted
 # unprivileged-user-namespace policy requires the parent application profile to
 # grant userns creation before Bubblewrap can create its private namespaces.
-profile paladyn flags=(unconfined) {
+profile darklinger flags=(unconfined) {
   userns,
-  include if exists <local/paladyn>
+  include if exists <local/darklinger>
 }

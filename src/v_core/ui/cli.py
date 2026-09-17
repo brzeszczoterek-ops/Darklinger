@@ -11,6 +11,7 @@ from v_core.config import load_config
 from v_core.edition import launch_edition_monitor, resolve_edition
 from v_core.llm import LLM
 from v_core.main import VCore
+from v_core.branding import env_value
 from v_core.model_loader import RoutedModelRuntime, bootstrap_interactive_model
 
 from .app import UIRuntime, create_app
@@ -72,7 +73,7 @@ async def run_ui(*, port: int, open_browser: bool) -> None:
             await asyncio.to_thread(webbrowser.open, f"http://127.0.0.1:{port}/")
 
     opener = asyncio.create_task(open_when_ready()) if open_browser else None
-    print(f"PALADYN UI: http://127.0.0.1:{port}/")
+    print(f"DARKLINGER UI: http://127.0.0.1:{port}/")
     if owner_monitor_started:
         print("Owner performance monitor opened in a separate terminal.")
     print("Use HOLD TO KILL or Ctrl+C to stop V and the managed model.")
@@ -85,11 +86,11 @@ async def run_ui(*, port: int, open_browser: bool) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Start PALADYN's local graphical UI")
+    parser = argparse.ArgumentParser(description="Start DARKLINGER's local graphical UI")
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.getenv("PALADYN_UI_PORT", "8765")),
+        default=int(env_value("DARKLINGER_UI_PORT", "8765")),
     )
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()

@@ -1,6 +1,6 @@
 # Local Model Qualification and Routing
 
-PALADYN never trusts a model filename, model-card description, popularity score,
+DARKLINGER never trusts a model filename, model-card description, popularity score,
 or the model's own claim about its abilities. A GGUF becomes eligible for
 automatic routing only after the local qualification harness tests the exact
 file with its exact saved llama.cpp profile.
@@ -8,13 +8,13 @@ file with its exact saved llama.cpp profile.
 ## Qualification
 
 Interactive users can select **Qualify or requalify a local model** from the
-PALADYN startup menu. The model is unloaded after its card is saved and the menu
+DARKLINGER startup menu. The model is unloaded after its card is saved and the menu
 returns, allowing another qualification or a normal V startup. The CLI remains
 available for automation:
 
 ```bash
-paladyn-model list
-paladyn-model qualify /path/to/model.gguf
+darklinger-model list
+darklinger-model qualify /path/to/model.gguf
 ```
 
 The bounded harness tests:
@@ -53,34 +53,34 @@ and can disable routing without deleting profiles or qualification history.
 The equivalent CLI commands are:
 
 ```bash
-paladyn-model pool /path/to/chat.gguf /path/to/coder.gguf /path/to/research.gguf
-paladyn-model routing on
-paladyn-model route "Create a Python parser for these records"
+darklinger-model pool /path/to/chat.gguf /path/to/coder.gguf /path/to/research.gguf
+darklinger-model routing on
+darklinger-model route "Create a Python parser for these records"
 ```
 
 The pool contains at most three current, qualified local models. Before a
-top-level user turn, PALADYN classifies the runtime-owned task contract as
+top-level user turn, DARKLINGER classifies the runtime-owned task contract as
 conversation, coding, research, tool use, or document work. During a mixed
 objective, it checks the remaining contract evidence before each new phase. A
 task may therefore begin in research, move to coding after browser evidence is
 complete, and move to tool use after an artifact activates. The model never
 selects itself or announces a phase transition in prose.
 
-PALADYN ranks cards using fixed capability weights. It keeps the current model
+DARKLINGER ranks cards using fixed capability weights. It keeps the current model
 when the best alternative improves the measured phase score by fewer than five
 points, avoiding multi-gigabyte hot swaps for noise-level differences.
 
-Only one `llama-server` is kept active. If another qualified model wins, PALADYN
+Only one `llama-server` is kept active. If another qualified model wins, DARKLINGER
 cancels unfinished background reflection, stops the current process, loads the
 selected profile, verifies `/health` and `/v1/models`, and repoints the one shared
 LLM client used by the agent and memory components. Failed startup moves through
-the verified fallback order. PALADYN records the decision and failures in a
+the verified fallback order. DARKLINGER records the decision and failures in a
 private `routing.jsonl` journal using only a digest of the owner prompt.
 
 Disable switching without deleting profiles or cards:
 
 ```bash
-paladyn-model routing off
+darklinger-model routing off
 ```
 
 Qualification measures the tested protocol behaviours. It is not proof that a

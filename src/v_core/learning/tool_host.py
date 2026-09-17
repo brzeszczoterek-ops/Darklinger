@@ -1,4 +1,4 @@
-"""Trusted, minimal host for generated PALADYN tools.
+"""Trusted, minimal host for generated DARKLINGER tools.
 
 This module is executed only inside the offline sandbox. Generated code is
 loaded as data from a read-only mount and must expose ``run(arguments)``.
@@ -21,7 +21,7 @@ def main() -> int:
     if not isinstance(arguments, dict):
         raise TypeError("tool arguments must be a JSON object")
 
-    spec = importlib.util.spec_from_file_location("paladyn_generated_tool", source)
+    spec = importlib.util.spec_from_file_location("darklinger_generated_tool", source)
     if spec is None or spec.loader is None:
         raise RuntimeError("could not load generated tool")
     module = importlib.util.module_from_spec(spec)

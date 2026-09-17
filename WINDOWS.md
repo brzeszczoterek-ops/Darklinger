@@ -1,8 +1,8 @@
-# Uruchamianie PALADYNA na Windowsie
+# Uruchamianie DARKLINGERA na Windowsie
 
 ## Aktualny stan obsługi
 
-PALADYN nie jest jeszcze natywną aplikacją Windows. Zalecanym środowiskiem jest
+DARKLINGER nie jest jeszcze natywną aplikacją Windows. Zalecanym środowiskiem jest
 **Windows 10 w wersji 2004 (build 19041) lub nowszy albo Windows 11, WSL2 i
 Ubuntu 24.04**. Dzięki temu rdzeń agenta działa w takim samym środowisku
 linuksowym jak wersja deweloperska, a użytkownik nadal uruchamia go z Windows
@@ -19,9 +19,9 @@ W obecnej wersji pod WSL2:
 | Sandbox Bubblewrap | należy zweryfikować testem na konkretnym WSL |
 | Mowa, Whisper, Kokoro/Piper i F2 | eksperymentalne, nieobjęte tą instrukcją |
 | Fizyczny kill switch `Q+P+0` z `/dev/input` | nieobsługiwany przez WSL |
-| Awaryjne `paladyn-control panic-all` | obsługiwane z drugiego terminala WSL |
+| Awaryjne `darklinger-control panic-all` | obsługiwane z drugiego terminala WSL |
 
-Jeżeli Bubblewrap nie przejdzie testów, PALADYN odmówi uruchamiania
+Jeżeli Bubblewrap nie przejdzie testów, DARKLINGER odmówi uruchamiania
 wygenerowanego kodu. Jest to zachowanie fail-closed, a nie zgoda na wykonanie go
 bez izolacji.
 
@@ -74,7 +74,7 @@ npx --version
 bwrap --version
 ```
 
-PALADYN wymaga Pythona **3.12 lub nowszego**. Ubuntu 24.04 dostarcza Pythona
+DARKLINGER wymaga Pythona **3.12 lub nowszego**. Ubuntu 24.04 dostarcza Pythona
 3.12. Jeżeli polecenie pokazuje starszą wersję, nie kontynuuj instalacji w tej
 dystrybucji — zainstaluj Ubuntu 24.04 w WSL.
 
@@ -82,15 +82,15 @@ Serwer przeglądarki MCP wymaga Node.js **18 lub nowszego**. Jeśli `node
 --version` pokazuje starszą wersję, zainstaluj aktualne wydanie LTS zgodnie z
 oficjalną stroną Node.js podlinkowaną na końcu instrukcji.
 
-## 3. Instalacja PALADYNA
+## 3. Instalacja DARKLINGERA
 
 Kod i modele najlepiej przechowywać w linuksowym systemie plików WSL, a nie w
 `/mnt/c`, ponieważ operacje na wielu plikach są tam szybsze.
 
 ```bash
 cd ~
-git clone https://github.com/brzeszczoterek-ops/PALADYN.git
-cd PALADYN
+git clone https://github.com/brzeszczoterek-ops/DARKLINGER.git
+cd DARKLINGER
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
@@ -102,7 +102,7 @@ chmod 600 .env
 Po każdym otwarciu nowego terminala aktywuj środowisko poleceniem:
 
 ```bash
-cd ~/PALADYN
+cd ~/DARKLINGER
 source .venv/bin/activate
 ```
 
@@ -143,7 +143,7 @@ cmake --build build --config Release -j "$(nproc)"
 test -x build/bin/llama-server && echo "llama-server CUDA: OK"
 ```
 
-PALADYN automatycznie szuka pliku
+DARKLINGER automatycznie szuka pliku
 `~/llama.cpp/build/bin/llama-server`. Przy innej lokalizacji wpisz do `.env`
 pełną ścieżkę linuksową, na przykład:
 
@@ -169,18 +169,18 @@ wydajność. Skopiowanie dużego GGUF oczywiście zajmie dodatkowe miejsce na dy
 ## 6. Pierwszy start
 
 ```bash
-cd ~/PALADYN
+cd ~/DARKLINGER
 source .venv/bin/activate
-paladyn-ui
+darklinger-ui
 ```
 
-Przy pierwszym uruchomieniu PALADYN zapyta o katalog modeli. Podaj:
+Przy pierwszym uruchomieniu DARKLINGER zapyta o katalog modeli. Podaj:
 
 ```text
 /home/twoja_nazwa/models
 ```
 
-Najpierw w terminalu wybierz model i profil. Po jego uruchomieniu PALADYN otworzy
+Najpierw w terminalu wybierz model i profil. Po jego uruchomieniu DARKLINGER otworzy
 lokalny interfejs w domyślnej przeglądarce pod adresem
 `http://127.0.0.1:8765/`. Interfejs nie jest wystawiany do sieci lokalnej ani do
 Internetu. Na pierwszy test warto użyć ostrożnych
@@ -210,27 +210,27 @@ narzędzie, nie jest dowodem wykonania — sprawdź widoczny wynik i dziennik se
 Klawisz `F2` rozpoczyna i kończy nagrywanie push-to-talk, jeżeli lokalna warstwa
 mowy została skonfigurowana. Przełącznik `V SPEAKS` steruje odczytywaniem
 odpowiedzi. Przytrzymanie `HOLD TO KILL` zatrzymuje interfejs, V oraz model zarządzany
-przez PALADYNA.
+przez DARKLINGERA.
 
 Jeżeli potrzebny jest wyłącznie stary interfejs terminalowy, uruchom zamiast tego
 `v-core`.
 
 ## 7. Skrót uruchamiający z Windowsa
 
-Repozytorium zawiera plik [`PALADYN-WSL.cmd`](PALADYN-WSL.cmd). Skopiuj go na
-pulpit Windows. Zakłada on, że repozytorium znajduje się w `~/PALADYN` w
+Repozytorium zawiera plik [`DARKLINGER-WSL.cmd`](DARKLINGER-WSL.cmd). Skopiuj go na
+pulpit Windows. Zakłada on, że repozytorium znajduje się w `~/DARKLINGER` w
 domyślnej dystrybucji WSL.
 
 Po dwukrotnym kliknięciu plik otworzy sesję WSL, aktywuje `.venv` i uruchomi
-`paladyn-ui`. Jeżeli repozytorium znajduje się gdzie indziej, zmień ścieżkę
-`~/PALADYN` wewnątrz pliku.
+`darklinger-ui`. Jeżeli repozytorium znajduje się gdzie indziej, zmień ścieżkę
+`~/DARKLINGER` wewnątrz pliku.
 
 ## 8. Sprawdzenie instalacji
 
 Przed poważniejszą pracą uruchom:
 
 ```bash
-cd ~/PALADYN
+cd ~/DARKLINGER
 source .venv/bin/activate
 pytest -q test/test_model_loader.py test/test_agent_runtime.py
 pytest -q test/test_sandbox.py
@@ -246,15 +246,15 @@ Zwykły proces zatrzymasz przez `Ctrl+C`. W razie zadania autonomicznego otwórz
 drugi terminal Ubuntu i wykonaj:
 
 ```bash
-cd ~/PALADYN
+cd ~/DARKLINGER
 source .venv/bin/activate
-paladyn-control panic-all
+darklinger-control panic-all
 ```
 
 Po sprawdzeniu sytuacji ponowne uzbrojenie mechanizmu wymaga jawnego polecenia:
 
 ```bash
-paladyn-control reset-panic
+darklinger-control reset-panic
 ```
 
 Fizyczny watcher `Q+P+0` używa linuksowego `/dev/input/event*` i nie jest
@@ -263,12 +263,12 @@ Windows używaj drugiego terminala z `panic-all`.
 
 ## 10. Funkcje, których na razie nie włączamy
 
-- Ustaw `PALADYN_OWNER_MONITOR=0`. Automatyczne okno monitora zakłada obecnie
+- Ustaw `DARKLINGER_OWNER_MONITOR=0`. Automatyczne okno monitora zakłada obecnie
   terminal linuksowy z `gnome-terminal`.
 - Warstwa głosowa korzysta z PipeWire, `pw-record`, `pw-play` i linuksowej
   obsługi F2. WSLg może udostępniać część audio, ale pełny tor mikrofon–STT–TTS
   nie jest jeszcze testowanym profilem Windows.
-- Nie przekazuj PALADYNOWI ścieżek `C:\...`. W WSL ten sam dysk ma postać
+- Nie przekazuj DARKLINGEROWI ścieżek `C:\...`. W WSL ten sam dysk ma postać
   `/mnt/c/...`.
 
 ## 11. Typowe problemy
@@ -298,19 +298,19 @@ instalacji potrzebne jest połączenie z internetem.
 npx --yes playwright install firefox
 ```
 
-Następnie uruchom PALADYNA ponownie.
+Następnie uruchom DARKLINGERA ponownie.
 
 ### Model nie mieści się w VRAM
 
-Zatrzymaj PALADYNA przez `Ctrl+C`, uruchom go ponownie, edytuj profil i zmniejsz
+Zatrzymaj DARKLINGERA przez `Ctrl+C`, uruchom go ponownie, edytuj profil i zmniejsz
 `Context size`, `Batch size` oraz `Micro-batch size`. Kwantyzacja K/V zmniejsza
 pamięć cache, ale nie zmniejsza samych wag zapisanych w GGUF.
 
 ### `local model loader requires an interactive terminal`
 
-Uruchom `paladyn-ui` (lub terminalowe `v-core`) bezpośrednio w Windows
+Uruchom `darklinger-ui` (lub terminalowe `v-core`) bezpośrednio w Windows
 Terminalu/Ubuntu albo przez
-`PALADYN-WSL.cmd`. Nie przekierowuj standardowego wejścia podczas wyboru modelu.
+`DARKLINGER-WSL.cmd`. Nie przekierowuj standardowego wejścia podczas wyboru modelu.
 
 ### Test Bubblewrap nie przechodzi
 
@@ -318,10 +318,10 @@ Nie wyłączaj zabezpieczenia, żeby wymusić wykonanie kodu. Najpierw zaktualiz
 WSL (`wsl --update` w PowerShellu), zrestartuj go (`wsl --shutdown`) i ponów test.
 Do czasu poprawnego wyniku traktuj generowane narzędzia jako niedostępne.
 
-## 12. Aktualizacja PALADYNA
+## 12. Aktualizacja DARKLINGERA
 
 ```bash
-cd ~/PALADYN
+cd ~/DARKLINGER
 git pull --ff-only
 source .venv/bin/activate
 pip install -e ".[dev]"

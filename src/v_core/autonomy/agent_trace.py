@@ -309,7 +309,7 @@ class AgentTaskTrace:
 
     @staticmethod
     def recover_stale_running(root: Path) -> list[str]:
-        """Mark checkpoints abandoned by a dead PALADYN process as interrupted.
+        """Mark checkpoints abandoned by a dead DARKLINGER process as interrupted.
 
         A live PID is left untouched so two explicitly separate runtimes do not
         rewrite each other's active task. Older checkpoints had no PID; a new
@@ -347,12 +347,12 @@ class AgentTaskTrace:
                     continue
                 call["status"] = "failed"
                 call["finished_at"] = now
-                call["error"] = "PALADYN runtime exited before the tool completed."
+                call["error"] = "DARKLINGER runtime exited before the tool completed."
             trace.status = "interrupted"
             trace.updated_at = now
             trace.finished_at = now
             data = {
-                "reason": "previous PALADYN runtime exited without closing the task"
+                "reason": "previous DARKLINGER runtime exited without closing the task"
             }
             trace._journal.append(task_id, "task_recovered_as_interrupted", data)
             trace._save(result=data)

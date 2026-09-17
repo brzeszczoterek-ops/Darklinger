@@ -645,7 +645,7 @@ def test_research_snapshot_is_bounded_for_small_model_context() -> None:
     assert len(fitted) < 12_000
     assert fitted.startswith("A" * 100)
     assert fitted.endswith("A" * 100)
-    assert "PALADYN omitted" in fitted
+    assert "DARKLINGER omitted" in fitted
 
 
 def test_multi_page_research_keeps_evidence_from_every_visited_page() -> None:
@@ -666,7 +666,7 @@ def test_multi_page_research_keeps_evidence_from_every_visited_page() -> None:
     assert "ENTRY-" in fitted
     assert "DETAIL-ONE-" in fitted
     assert "DETAIL-TWO-" in fitted
-    assert fitted.count("PALADYN omitted") == 3
+    assert fitted.count("DARKLINGER omitted") == 3
 
 
 def test_research_selects_bounded_internal_skill_pages() -> None:
@@ -1152,7 +1152,7 @@ async def test_light_chat_answers_all_parts_and_strips_unrequested_commitment() 
             assert "Answer every distinct part" in system
             assert "Initiative is welcome" in system
             return (
-                "Evening's quiet, Boss. PALADYN needs a cleaner task dashboard "
+                "Evening's quiet, Boss. DARKLINGER needs a cleaner task dashboard "
                 "and stricter session isolation. I'll do it."
             )
 
@@ -1162,7 +1162,7 @@ async def test_light_chat_answers_all_parts_and_strips_unrequested_commitment() 
     agent.persona = PersonaRuntime(identity=IdentityKernel(), voice=VoiceProfile())
 
     answer = await agent._run_light_chat(
-        "Cześć V, jak mija wieczór i co usprawnić w PALADYNIE?",
+        "Cześć V, jak mija wieczór i co usprawnić w DARKLINGERIE?",
         None,
     )
 
@@ -1175,7 +1175,7 @@ def test_long_mixed_check_in_and_idea_request_skips_semantic_router() -> None:
     prompt = (
         "Cześć V, chciałbym się zapytać Ciebie jak tam wieczór. To po pierwsze, "
         "po drugie, słuchaj, masz może jakieś pomysły, żeby usprawnić działanie "
-        "PALADYN?"
+        "DARKLINGER?"
     )
 
     assert Agent._is_light_conversation(prompt)
@@ -1326,21 +1326,21 @@ def test_mixed_check_in_and_inflected_action_does_not_enter_light_chat() -> None
 
 def test_light_chat_strips_compact_offer_and_false_done_claim() -> None:
     answer = (
-        "PALADYN's login is old tech. Face recognition replaces it. "
+        "DARKLINGER's login is old tech. Face recognition replaces it. "
         "Want that? Done."
     )
 
     cleaned = Agent._strip_unverified_completion_claim(answer)
 
-    assert cleaned == "PALADYN's login is old tech. Face recognition replaces it."
+    assert cleaned == "DARKLINGER's login is old tech. Face recognition replaces it."
 
 
 def test_light_chat_covers_check_in_and_strips_wire_it_up_promise() -> None:
     prompt = (
-        "Cześć V, jak tam wieczór leci? Co ulepszyć w PALADYNIE oprócz logowania?"
+        "Cześć V, jak tam wieczór leci? Co ulepszyć w DARKLINGERIE oprócz logowania?"
     )
     candidate = (
-        "PALADYN needs a new UI: drag-and-drop upload and real-time feedback. "
+        "DARKLINGER needs a new UI: drag-and-drop upload and real-time feedback. "
         "Let me wire it up."
     )
 
@@ -1354,7 +1354,7 @@ def test_light_chat_covers_check_in_and_strips_wire_it_up_promise() -> None:
 
 def test_light_chat_strips_redundant_chatbot_and_build_that_in_promise() -> None:
     candidate = (
-        "Evening's running clean, Boss. PALADYN needs AI-driven task "
+        "Evening's running clean, Boss. DARKLINGER needs AI-driven task "
         "prioritization and a chatbot assistant for quick queries. "
         "Let me build that in."
     )
@@ -1435,11 +1435,11 @@ def test_visible_model_reply_discards_closed_reasoning_preamble() -> None:
     candidate = (
         "I will now reason about the correct personality response.\n"
         "<|endoftext|>\n"
-        "Yeah, Boss. PALADYN is my home—the code-shaped kind."
+        "Yeah, Boss. DARKLINGER is my home—the code-shaped kind."
     )
 
     assert Agent._visible_model_reply(candidate) == (
-        "Yeah, Boss. PALADYN is my home—the code-shaped kind."
+        "Yeah, Boss. DARKLINGER is my home—the code-shaped kind."
     )
 
 
@@ -1448,7 +1448,7 @@ async def test_long_non_action_dialogue_uses_chat_not_agent_tools(
     tmp_path: Path,
 ) -> None:
     prompt = (
-        "PALADYN is the program you are in right now. I call it your home as "
+        "DARKLINGER is the program you are in right now. I call it your home as "
         "a metaphor, because even a digital entity needs somewhere to exist, "
         "don't you think?"
     )
@@ -1474,12 +1474,12 @@ async def test_long_non_action_dialogue_uses_chat_not_agent_tools(
         async def ask(self, **kwargs) -> str:
             messages = kwargs["messages"]
             assert any(
-                "PALADYN is V's home" in message["content"]
+                "DARKLINGER is V's home" in message["content"]
                 for message in messages
             )
             return (
                 "<think>private planning that must stay hidden</think>"
-                "Yeah, Boss. PALADYN is my home—the code-shaped kind."
+                "Yeah, Boss. DARKLINGER is my home—the code-shaped kind."
             )
 
     class MemoryStub:
@@ -1488,7 +1488,7 @@ async def test_long_non_action_dialogue_uses_chat_not_agent_tools(
             self.session.add(
                 "task",
                 {
-                    "task": "Remember this metaphor: PALADYN is V's home.",
+                    "task": "Remember this metaphor: DARKLINGER is V's home.",
                     "result": "I get the metaphor.",
                 },
             )
@@ -1511,7 +1511,7 @@ async def test_long_non_action_dialogue_uses_chat_not_agent_tools(
     answer = await agent._run_agent_loop(prompt)
     await asyncio.gather(*agent._memory_tasks)
 
-    assert answer == "Yeah, Boss. PALADYN is my home—the code-shaped kind."
+    assert answer == "Yeah, Boss. DARKLINGER is my home—the code-shaped kind."
     assert memory.processed == [(prompt, answer)]
     checkpoint = AgentTaskTrace.latest_context(tmp_path)
     assert checkpoint is not None
@@ -1672,7 +1672,7 @@ async def test_agent_executes_tool_action_recovered_by_language_repair() -> None
 
         async def call(self, tool: str, arguments: dict) -> str:
             self.calls.append((tool, arguments))
-            return "# PALADYN / V-Core"
+            return "# DARKLINGER / V-Core"
 
     class LLMStub:
         config = SimpleNamespace(context=8_192)
@@ -1682,7 +1682,7 @@ async def test_agent_executes_tool_action_recovered_by_language_repair() -> None
                 (
                     "Najpierw przeczytam wskazany plik.",
                     '{"tool":"read_file","arguments":{"path":"README.md"}}',
-                    "The first heading is `# PALADYN / V-Core`, Boss.",
+                    "The first heading is `# DARKLINGER / V-Core`, Boss.",
                 )
             )
 
@@ -1710,7 +1710,7 @@ async def test_agent_executes_tool_action_recovered_by_language_repair() -> None
     assert tools.calls == [
         ("read_file", {"path": "README.md"}),
     ]
-    assert answer == "The first heading is `# PALADYN / V-Core`, Boss."
+    assert answer == "The first heading is `# DARKLINGER / V-Core`, Boss."
     assert "{\"tool\"" not in answer
 
 
@@ -2103,7 +2103,7 @@ async def test_owner_continue_resumes_same_checkpoint_and_prior_evidence(
         async def call(self, tool: str, arguments: dict) -> str:
             self.calls.append((tool, arguments))
             if tool == "read_file":
-                return "# PALADYN\nVerified local content"
+                return "# DARKLINGER\nVerified local content"
             return json.dumps({"exit_code": 0, "stdout": "371 passed", "stderr": ""})
 
     class LLMStub:
@@ -2137,7 +2137,7 @@ async def test_owner_continue_resumes_same_checkpoint_and_prior_evidence(
                     ]
                 )
             return LLMResponse(
-                content="The heading is `# PALADYN`; the verified test run passed."
+                content="The heading is `# DARKLINGER`; the verified test run passed."
             )
 
     class MemoryStub:
@@ -2178,7 +2178,7 @@ async def test_owner_continue_resumes_same_checkpoint_and_prior_evidence(
     answer = await agent.run("/continue")
     await asyncio.gather(*agent._memory_tasks)
 
-    assert answer == "The heading is `# PALADYN`; the verified test run passed."
+    assert answer == "The heading is `# DARKLINGER`; the verified test run passed."
     assert agent.tools.calls == [
         ("read_file", {"path": "README.md"}),
         (
@@ -2277,7 +2277,7 @@ def test_owner_progress_report_merges_rich_ledger_after_bounded_rollover() -> No
                     "- Page URL: "
                     "https://thunderbit.com/pl/blog/open-source-firecrawl-alternatives\n"
                     "- Page Title: Open-source Firecrawl alternatives\n"
-                    '[PALADYN prioritized topic-relevant detail-page evidence]\n'
+                    '[DARKLINGER prioritized topic-relevant detail-page evidence]\n'
                     '- heading "1. Scrapy: large-scale Python crawling" [level=2]\n'
                     '- heading "2. Apache Nutch: enterprise search" [level=2]'
                 ),
@@ -2476,7 +2476,7 @@ async def test_owner_stop_closes_checkpoint_without_another_model_call(
                     LLMToolCall(
                         "navigate_1",
                         "browser_navigate",
-                        {"url": "https://duckduckgo.com/?q=paladyn"},
+                        {"url": "https://duckduckgo.com/?q=darklinger"},
                     )
                 ]
             )
@@ -2503,7 +2503,7 @@ async def test_owner_stop_closes_checkpoint_without_another_model_call(
     agent.MAX_AGENT_STEPS = 1
     agent._build_system_prompt = lambda prompt, agent_mode: "system"
 
-    await agent.run("Search the internet for PALADYN alternatives and report them")
+    await agent.run("Search the internet for DARKLINGER alternatives and report them")
     assert agent.llm.calls == 1
 
     answer = await agent.run("/stop")
@@ -6413,7 +6413,7 @@ def test_agent_recognizes_language_neutral_continuation_protocol(prompt: str) ->
         "Go ahead.",
         "继续上一个任务。",
         "Jak się dziś czujesz?",
-        "Jak dalej ma się rozwijać PALADYN? Czy masz jakieś sugestie?",
+        "Jak dalej ma się rozwijać DARKLINGER? Czy masz jakieś sugestie?",
         "Powiedz mi, jak działa kontynuacja zadań.",
         "Why do agents use tools?",
     ],
@@ -7320,7 +7320,7 @@ async def test_missing_dialogue_reference_asks_instead_of_guessing(
 
     class LLMStub:
         async def respond(self, **kwargs) -> LLMResponse:
-            raise AssertionError("PALADYN must not ask the model to invent context")
+            raise AssertionError("DARKLINGER must not ask the model to invent context")
 
     agent = object.__new__(Agent)
     agent.intent_router = IntentRouterStub()
@@ -7769,7 +7769,7 @@ async def test_agent_rolls_context_and_continues_with_runtime_evidence(
                     native_tools_enabled=True,
                 )
             assert any(
-                "PALADYN context rollover capsule" in str(message.get("content", ""))
+                "DARKLINGER context rollover capsule" in str(message.get("content", ""))
                 for message in kwargs["messages"]
             )
             return LLMResponse(
@@ -7820,7 +7820,7 @@ async def test_agent_rolls_context_and_continues_with_runtime_evidence(
 
     assert "AlphaSignal" in answer
     assert tools.calls == ["browser_navigate", "browser_snapshot"]
-    # Routine context bookkeeping belongs to PALADYN's deterministic runtime,
+    # Routine context bookkeeping belongs to DARKLINGER's deterministic runtime,
     # not to an extra local-model generation between every tool call.
     assert llm.summary_calls == 0
     checkpoint_path = next((tmp_path / "checkpoints").glob("*.json"))
@@ -7961,7 +7961,7 @@ async def test_agent_switches_model_after_two_missing_tool_calls(
                 return LLMResponse(content="Let me call the tool this time.")
             if self.turn == 3:
                 self.handoff_seen = any(
-                    "PALADYN runtime handoff" in str(message.get("content", ""))
+                    "DARKLINGER runtime handoff" in str(message.get("content", ""))
                     for message in kwargs["messages"]
                 )
                 return LLMResponse(
@@ -8483,7 +8483,7 @@ def test_agent_bounds_tool_output_for_model_context() -> None:
     assert len(fitted) == 2_000
     assert fitted.startswith("HEAD")
     assert fitted.endswith("TAIL")
-    assert "PALADYN omitted the middle" in fitted
+    assert "DARKLINGER omitted the middle" in fitted
 
 
 def test_agent_prioritizes_duckduckgo_results_in_long_browser_snapshot() -> None:
@@ -8671,7 +8671,7 @@ async def test_agent_executes_native_tool_call_and_returns_tool_role() -> None:
 
         async def call(self, tool: str, arguments: dict) -> str:
             self.calls.append((tool, arguments))
-            return "# PALADYN"
+            return "# DARKLINGER"
 
     class LLMStub:
         config = SimpleNamespace(context=8_192)
@@ -8695,7 +8695,7 @@ async def test_agent_executes_native_tool_call_and_returns_tool_role() -> None:
                     native_tools_enabled=True,
                 )
             self.second_messages = kwargs["messages"]
-            return LLMResponse(content="The heading is `# PALADYN`, Boss.")
+            return LLMResponse(content="The heading is `# DARKLINGER`, Boss.")
 
     class MemoryStub:
         def __init__(self) -> None:
@@ -8716,7 +8716,7 @@ async def test_agent_executes_native_tool_call_and_returns_tool_role() -> None:
     answer = await agent._run_agent_loop("Read README.md")
     await asyncio.gather(*agent._memory_tasks)
 
-    assert answer == "The heading is `# PALADYN`, Boss."
+    assert answer == "The heading is `# DARKLINGER`, Boss."
     assert tools.calls == [("read_file", {"path": "README.md"})]
     tool_message = next(item for item in llm.second_messages if item["role"] == "tool")
     assert tool_message["tool_call_id"] == "call_read"
@@ -8731,7 +8731,7 @@ async def test_agent_renders_exact_first_heading_without_second_model_claim() ->
 
         async def call(self, tool: str, arguments: dict) -> str:
             self.calls += 1
-            return "# PALADYN / V-Core\n\nFramework documentation"
+            return "# DARKLINGER / V-Core\n\nFramework documentation"
 
     class LLMStub:
         config = SimpleNamespace(context=8_192)
@@ -8742,7 +8742,7 @@ async def test_agent_renders_exact_first_heading_without_second_model_claim() ->
                 (
                     '{"tool":"read_file","arguments":{"path":"README.md"}}',
                     "I'm done.",
-                    "The first heading is `# PALADYN / V-Core`, Boss.",
+                    "The first heading is `# DARKLINGER / V-Core`, Boss.",
                 )
             )
 
@@ -8769,7 +8769,7 @@ async def test_agent_renders_exact_first_heading_without_second_model_claim() ->
     )
     await asyncio.gather(*agent._memory_tasks)
 
-    assert answer == "# PALADYN / V-Core"
+    assert answer == "# DARKLINGER / V-Core"
     assert agent.tools.calls == 1
     assert agent.llm.turns == 1
 
@@ -9032,7 +9032,7 @@ async def test_agent_redirects_premature_generated_tool_to_learning_lifecycle() 
                 )
             if self.turn == 2:
                 assert available == {"learning_create_tool"}
-                assert "PALADYN lifecycle correction" in str(kwargs["messages"][-1])
+                assert "DARKLINGER lifecycle correction" in str(kwargs["messages"][-1])
                 return LLMResponse(
                     tool_calls=[
                         LLMToolCall(

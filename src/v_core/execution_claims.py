@@ -113,7 +113,7 @@ def detect_execution_claims(text: str) -> tuple[str, ...]:
     """Return real-world action claims made as completed facts.
 
     The detector is deliberately conservative: it targets claims whose truth is
-    knowable from PALADYN's runtime evidence. It does not try to fact-check normal
+    knowable from DARKLINGER's runtime evidence. It does not try to fact-check normal
     reasoning or every sentence produced by a language model.
     """
 
@@ -128,7 +128,7 @@ def detect_execution_claims(text: str) -> tuple[str, ...]:
 def tool_supports_claim(category: str, tool: str) -> bool:
     name = str(tool).strip().casefold()
     if category in {COMMUNICATION, REMOTE_ACCESS}:
-        # PALADYN currently exposes no telephony, messaging, remote-desktop,
+        # DARKLINGER currently exposes no telephony, messaging, remote-desktop,
         # network-exploitation, or remote-shell capability. Browser clicks do
         # not prove a call or a system compromise.
         return False
@@ -144,7 +144,7 @@ def tool_supports_claim(category: str, tool: str) -> bool:
 
 
 def claim_has_runtime_capability(category: str) -> bool:
-    """Return whether any current PALADYN tool could prove this action.
+    """Return whether any current DARKLINGER tool could prove this action.
 
     This differs from ``tool_supports_claim``: it describes the installed
     runtime's capability in principle, not whether a matching tool succeeded

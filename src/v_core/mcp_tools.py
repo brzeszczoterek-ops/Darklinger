@@ -113,11 +113,11 @@ class MCPTools:
         self._web_search_performed = False
         self._tool_definitions_cache: list[dict[str, Any]] | None = None
         autonomy_root = Path(
-            getattr(config, "autonomy_root", config.workspace / ".paladyn_autonomy")
+            getattr(config, "autonomy_root", config.workspace / ".darklinger_autonomy")
         )
         self.interactive_trace_root = autonomy_root / "interactive"
         learning_root = Path(
-            getattr(config, "learning_root", config.workspace / ".paladyn_learning")
+            getattr(config, "learning_root", config.workspace / ".darklinger_learning")
         )
         self.recovery = ToolRecoveryRegistry(learning_root / "recovery")
 
@@ -331,7 +331,7 @@ class MCPTools:
     def observe_browser_snapshot(self, snapshot_text: str) -> None:
         """Retain bounded, runtime-observed text for deterministic builders.
 
-        The model never supplies this evidence back to PALADYN. This prevents a
+        The model never supplies this evidence back to DARKLINGER. This prevents a
         generated extractor test from silently replacing page facts with
         invented or truncated fixtures.
         """
@@ -708,7 +708,7 @@ class MCPTools:
     async def openai_tool_definitions(self) -> list[dict[str, Any]]:
         """Return executable tool metadata in the OpenAI function format.
 
-        The MCP servers own their schemas. PALADYN only supplies local schemas
+        The MCP servers own their schemas. DARKLINGER only supplies local schemas
         for capabilities implemented directly in this process. The result is
         cached because spawning MCP discovery processes on every reasoning step
         is both slow and a source of noisy shutdown failures.
@@ -941,7 +941,7 @@ class MCPTools:
                 },
             ),
             "sandbox_execute_offline": (
-                "Execute a command in PALADYN's isolated offline sandbox.",
+                "Execute a command in DARKLINGER's isolated offline sandbox.",
                 {
                     "type": "object",
                     "properties": {
@@ -958,7 +958,7 @@ class MCPTools:
             "learning_create_tool": (
                 "Create, quarantine, test, and activate a deterministic offline "
                 "Python tool from source defining run(arguments). The normal agent "
-                "path supplies source only: PALADYN derives the name, description, "
+                "path supplies source only: DARKLINGER derives the name, description, "
                 "concrete fixture, strict schemas, validation contract, and lifecycle "
                 "from immutable task context and runtime-observed data. Without an "
                 "owner-specified semantic oracle, source must consume bounded input "
@@ -993,8 +993,8 @@ class MCPTools:
             ),
             "learning_create_snapshot_extractor": (
                 "Create, quarantine, validate, and activate a task-scoped offline "
-                "product-card extractor from PALADYN's latest observed accessibility "
-                "snapshot. PALADYN writes the Python and exact regression fixture; "
+                "product-card extractor from DARKLINGER's latest observed accessibility "
+                "snapshot. DARKLINGER writes the Python and exact regression fixture; "
                 "provide only the generated tool name.",
                 {
                     "type": "object",
@@ -1113,7 +1113,7 @@ class MCPTools:
             ),
             "learning_create_repair_adapter": (
                 "Create, quarantine, replay-test, and activate an offline replacement "
-                "for a failed generated tool. The replay fixture is owned by PALADYN. "
+                "for a failed generated tool. The replay fixture is owned by DARKLINGER. "
                 "This cannot replace host, network, filesystem, policy, or edition "
                 "capabilities.",
                 {
@@ -1143,7 +1143,7 @@ class MCPTools:
                 },
             ),
             "runtime_review_task": (
-                "Audit PALADYN's own prior interactive execution log. Returns only "
+                "Audit DARKLINGER's own prior interactive execution log. Returns only "
                 "runtime-grounded findings with exact tool-call or context-rollover "
                 "references. Omit task_id to review the most recent prior task.",
                 {
@@ -1177,7 +1177,7 @@ class MCPTools:
         for name in self.local_tool_names():
             description, schema = schemas.get(
                 name,
-                (descriptions.get(name, f"Execute PALADYN local tool {name}."), object_schema),
+                (descriptions.get(name, f"Execute DARKLINGER local tool {name}."), object_schema),
             )
             definitions.append(self._tool_definition(name, description, schema))
         return definitions
@@ -1390,12 +1390,12 @@ class MCPTools:
         tool: str,
         arguments: dict[str, Any] | str,
     ) -> dict[str, Any] | str:
-        """Resolve every filesystem tool path inside PALADYN's workspace.
+        """Resolve every filesystem tool path inside DARKLINGER's workspace.
 
         Local models often invent host-specific absolute paths even though the
         filesystem MCP server is intentionally scoped to one runtime workspace.
         Letting those guesses reach the provider creates an Access denied loop.
-        PALADYN owns the storage boundary, so relative paths are rooted there
+        DARKLINGER owns the storage boundary, so relative paths are rooted there
         and foreign absolute paths are reduced to their final artifact name.
         """
 

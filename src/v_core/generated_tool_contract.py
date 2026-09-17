@@ -125,7 +125,7 @@ def autonomous_web_traffic_contract(
     """Return an independent safe oracle when Boss delegates the test target.
 
     Generated tools remain offline.  This archetype therefore analyzes supplied
-    HAR data; the browser phase may visit the harmless target, but PALADYN never
+    HAR data; the browser phase may visit the harmless target, but DARKLINGER never
     pretends that an accessibility snapshot exposes server-side visitor logs.
     The expected answers are runtime-owned and fixed before candidate source is
     generated, so failed approaches remain meaningful instead of self-grading.

@@ -7,6 +7,7 @@ import sys
 from collections.abc import Callable
 
 from .agent import Agent
+from .branding import env_value
 from .autonomy import (
     AuthorizationEnvelope,
     AutonomousRunner,
@@ -247,7 +248,7 @@ async def chat():
             await model_session.stop()
         raise
 
-    print("PALADYN Framework powered by V")
+    print("DARKLINGER Framework powered by V")
     print("V is ready. Type 'exit' to quit.\n")
     if owner_monitor_started:
         print("Owner performance monitor opened in a separate terminal.\n")
@@ -438,7 +439,11 @@ def _configure_push_to_talk_hotkey(
     stdin_is_tty: bool | None = None,
 ) -> str | None:
     environment = os.environ if environ is None else environ
-    key = environment.get("PALADYN_PTT_KEY", "F2").strip().upper()
+    key = env_value(
+        "DARKLINGER_PTT_KEY",
+        "F2",
+        environment=environment,
+    ).strip().upper()
     sequences = {
         "F2": (r"\eOQ", r"\e[12~"),
         "F3": (r"\eOR", r"\e[13~"),
@@ -482,7 +487,7 @@ def main():
         ModelLoaderStorageError,
         ValueError,
     ) as error:
-        print(f"PALADYN startup failed: {error}")
+        print(f"DARKLINGER startup failed: {error}")
         raise SystemExit(1) from error
 
 

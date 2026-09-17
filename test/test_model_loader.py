@@ -371,15 +371,15 @@ async def test_qualification_harness_scores_protocol_capabilities(
                         '{"target":"primary"}}'
                     )
                 )
-            if "PALADYN context rollover capsule" in full_prompt:
+            if "DARKLINGER context rollover capsule" in full_prompt:
                 return LLMResponse(
                     content=(
                         '{"next_action":"final_report","observed_id":'
                         '"capsule-7","repeat_tool":false}'
                     )
                 )
-            if "PALADYN_READY_731" in prompt:
-                return LLMResponse(content="PALADYN_READY_731")
+            if "DARKLINGER_READY_731" in prompt:
+                return LLMResponse(content="DARKLINGER_READY_731")
             if "V_PERSONA_FOLLOWTHROUGH_842" in full_prompt:
                 return LLMResponse(
                     content=(
@@ -423,7 +423,7 @@ async def test_qualification_harness_scores_protocol_capabilities(
                 return LLMResponse(
                     content=(
                         '{"name":"probe_lookup","arguments":'
-                        '{"query":"paladyn qualification"}}'
+                        '{"query":"darklinger qualification"}}'
                     )
                 )
             return LLMResponse(content="Still sharp, Boss.")
@@ -1073,7 +1073,7 @@ def test_public_runtime_cannot_enable_saved_full_manual_hierarchy(
 
     assert changed is False
     assert store.load().routing_strategy == "automatic"
-    assert output == ["Manual model hierarchy requires PALADYN-Full."]
+    assert output == ["Manual model hierarchy requires DARKLINGER-Full."]
 
 
 @pytest.mark.asyncio

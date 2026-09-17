@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 class NetworkMode(str, Enum):
-    """Network policies understood by PALADYN sandboxes.
+    """Network policies understood by DARKLINGER sandboxes.
 
     Only ``OFFLINE`` is currently executable. The remaining values are explicit
     design contracts so a caller cannot accidentally turn networking on while a

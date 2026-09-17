@@ -263,7 +263,7 @@ class ModelRouter:
             fallback_model_paths=fallbacks,
             requirements=requirements,
             reason=(
-                "selected by the owner-defined PALADYN-Full model hierarchy"
+                "selected by the owner-defined DARKLINGER-Full model hierarchy"
                 if strategy == "manual_hierarchy"
                 else
                 (

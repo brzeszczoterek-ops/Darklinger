@@ -381,13 +381,13 @@ result available now, or state plainly that the visited-page scope was insuffici
             ]
             if matches:
                 lines.append(
-                    "- PALADYN overlap visible in the description: "
+                    "- DARKLINGER overlap visible in the description: "
                     + ", ".join(matches)
                     + "."
                 )
             else:
                 lines.append(
-                    "- PALADYN fit is not established by this page's short "
+                    "- DARKLINGER fit is not established by this page's short "
                     "description; the repository still needs inspection."
                 )
             lines.append(f"- Verified detail page: {record['url']}")
@@ -505,7 +505,7 @@ result available now, or state plainly that the visited-page scope was insuffici
         if len(snapshot) <= budget:
             return snapshot
         omitted = len(snapshot) - budget
-        marker = f"\n\n[PALADYN omitted {omitted} snapshot characters.]\n\n"
+        marker = f"\n\n[DARKLINGER omitted {omitted} snapshot characters.]\n\n"
         body_budget = max(0, budget - len(marker))
         head_size = int(body_budget * 0.7)
         tail_size = body_budget - head_size

@@ -297,7 +297,7 @@ class ContextWindowManager:
             {
                 "role": "user",
                 "content": (
-                    "Continue Boss's existing task from this PALADYN context "
+                    "Continue Boss's existing task from this DARKLINGER context "
                     "rollover capsule. The working summary was compressed by the "
                     "model and is planning context, not proof. Runtime evidence is "
                     "the only execution evidence. Do not announce a restart, ask "
@@ -387,7 +387,7 @@ class ContextWindowManager:
                 "=== PREVIOUS RUNTIME CHECKPOINT ===",
             }:
                 continue
-            if heading == "=== ACTIVE PALADYN SKILLS ===" and len(section) > 2_500:
+            if heading == "=== ACTIVE DARKLINGER SKILLS ===" and len(section) > 2_500:
                 section = section[:2_500] + "\n[skill context compacted at rollover]"
             kept.append(section)
         return "\n\n".join(kept)
@@ -416,7 +416,7 @@ class ContextWindowManager:
                     {
                         "role": "system",
                         "content": (
-                            "Compress a PALADYN task checkpoint. Use only the supplied "
+                            "Compress a DARKLINGER task checkpoint. Use only the supplied "
                             "objective, prior notes, and runtime evidence. Never invent "
                             "an action, result, person, source, fact, or completed step. "
                             "Return exactly one JSON object with four arrays of short "

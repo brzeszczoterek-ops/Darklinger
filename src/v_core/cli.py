@@ -19,7 +19,7 @@ def chat():
 
     agent = Agent(load_config())
 
-    console.print(f"[bold green]PALADYN / V-Core {__version__}[/bold green]")
+    console.print(f"[bold green]Darklinger / V-Core {__version__}[/bold green]")
     console.print("Type 'exit' to quit.\n")
 
     while True:

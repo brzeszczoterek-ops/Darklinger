@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "v-core"
 version = "3.10"
-description = "PALADYN Framework powered by V"
+description = "Darklinger local agent framework powered by V"
 readme = "README.md"
 requires-python = ">=3.12"
 
@@ -40,6 +40,11 @@ pythonpath = ["src"]
 
 [project.scripts]
 v-core = "v_core.main:main"
+darklinger-control = "v_core.autonomy.cli:main"
+darklinger-learning = "v_core.learning.cli:main"
+darklinger-model = "v_core.model_loader.cli:main"
+darklinger-ui = "v_core.ui.cli:main"
+# One-cycle command compatibility for installations created before the rename.
 paladyn-control = "v_core.autonomy.cli:main"
 paladyn-learning = "v_core.learning.cli:main"
 paladyn-model = "v_core.model_loader.cli:main"

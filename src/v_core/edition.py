@@ -9,7 +9,7 @@ from .autonomy import AuthorizationEnvelope
 
 
 class EditionUnavailable(RuntimeError):
-    """Raised when a requested PALADYN edition is not installed."""
+    """Raised when a requested DARKLINGER edition is not installed."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +78,7 @@ class PublicEditionExtension:
     ) -> None:
         if evm_profile != "client" or learning_profile != "client":
             raise EditionUnavailable(
-                "owner_lab capabilities require the private PALADYN-Full package"
+                "owner_lab capabilities require the private DARKLINGER-Full package"
             )
 
     def bind_runtime(self, authorization: object, sandbox_backend: object | None) -> None:
@@ -94,7 +94,7 @@ class PublicEditionExtension:
         return False
 
     async def call_tool(self, name: str, arguments: dict[str, Any] | None) -> str:
-        raise EditionUnavailable(f"tool {name!r} is unavailable in public PALADYN")
+        raise EditionUnavailable(f"tool {name!r} is unavailable in public DARKLINGER")
 
     def ui_manifest(self) -> dict[str, Any] | None:
         return None
@@ -106,14 +106,14 @@ class PublicEditionExtension:
 def resolve_edition(requested: str | None = None) -> Edition:
     normalized = (requested or "auto").strip().casefold()
     if normalized not in {"auto", "public", "full"}:
-        raise ValueError("PALADYN_EDITION must be 'auto', 'public', or 'full'")
+        raise ValueError("DARKLINGER_EDITION must be 'auto', 'public', or 'full'")
     if normalized == "auto":
         normalized = "full" if find_spec("v_full") is not None else "public"
     if normalized == "public":
         return PUBLIC_EDITION
     if find_spec("v_full") is None:
         raise EditionUnavailable(
-            "PALADYN_EDITION=full was requested, but the private v_full package "
+            "DARKLINGER_EDITION=full was requested, but the private v_full package "
             "is not installed"
         )
     return FULL_EDITION
@@ -127,7 +127,7 @@ def load_edition_extension(edition: Edition) -> EditionExtension:
     except ModuleNotFoundError as exc:
         if exc.name == "v_full" or (exc.name or "").startswith("v_full."):
             raise EditionUnavailable(
-                "the private PALADYN-Full extension is unavailable"
+                "the private DARKLINGER-Full extension is unavailable"
             ) from exc
         raise
     factory = getattr(module, "create_extension", None)
@@ -139,7 +139,7 @@ def load_edition_extension(edition: Edition) -> EditionExtension:
     if not isinstance(extension, EditionExtension):
         raise EditionUnavailable(
             f"edition extension {edition.extension_module!r} does not satisfy "
-            "the PALADYN extension contract"
+            "the DARKLINGER extension contract"
         )
     return extension
 

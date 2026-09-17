@@ -433,7 +433,7 @@ def build_source_blueprint(
             description_hint.strip()
             or generated_contract.description_hint.strip()
             or (
-            f"Process bounded JSON input for the current PALADYN task with {name}."
+            f"Process bounded JSON input for the current DARKLINGER task with {name}."
             )
         )
         frozen_tests = tuple(
@@ -470,7 +470,7 @@ def build_source_blueprint(
         )
     name = _tool_name(objective, source, name_hint)
     description = description_hint.strip() or (
-        f"Process bounded JSON input for the current PALADYN task with {name}."
+        f"Process bounded JSON input for the current DARKLINGER task with {name}."
     )
     arguments: dict[str, Any] = {}
     missing: list[str] = []
@@ -487,7 +487,7 @@ def build_source_blueprint(
     if missing:
         rendered = ", ".join(missing)
         raise SourceBlueprintError(
-            "PALADYN cannot derive a concrete test fixture for generated-tool "
+            "DARKLINGER cannot derive a concrete test fixture for generated-tool "
             f"input fields: {rendered}. Supply exact JSON assignments in the "
             "objective or use literal defaults in source."
         )
@@ -509,7 +509,7 @@ def build_source_blueprint(
 
 
 def schema_from_example(value: Any) -> dict[str, Any]:
-    """Derive PALADYN's strict JSON-schema subset from one concrete value."""
+    """Derive DARKLINGER's strict JSON-schema subset from one concrete value."""
 
     if isinstance(value, dict):
         properties = {

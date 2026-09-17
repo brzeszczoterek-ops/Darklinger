@@ -116,7 +116,7 @@ async def main(*, cold_context=False):
         model = json.load(response)['data'][0]['id']
     os.environ.update(V_CORE_BASE_URL='http://127.0.0.1:5001/v1', V_CORE_MODEL=model,
                       V_CORE_CONTEXT='16000', V_CORE_TEMPERATURE='0.0', V_CORE_TIMEOUT='120')
-    root = Path(tempfile.mkdtemp(prefix='paladyn-har-trial-'))
+    root = Path(tempfile.mkdtemp(prefix='darklinger-har-trial-'))
     print(f'Trial artifacts: {root}', flush=True)
     config = SimpleNamespace(
         filesystem_server=['/usr/bin/false'], browser_server=['/usr/bin/false'],

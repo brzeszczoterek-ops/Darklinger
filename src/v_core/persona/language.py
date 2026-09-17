@@ -5,7 +5,7 @@ import re
 from langdetect import DetectorFactory, LangDetectException, detect_langs
 
 
-# langdetect uses random sampling internally. A fixed seed keeps PALADYN's
+# langdetect uses random sampling internally. A fixed seed keeps DARKLINGER's
 # language gate deterministic across runs and test environments.
 DetectorFactory.seed = 0
 

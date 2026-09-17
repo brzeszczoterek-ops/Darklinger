@@ -64,7 +64,7 @@ def product_card_fixture(snapshot_text: str, *, maximum_records: int = 3) -> str
     return snapshot_text[boundaries[0].start() : end].rstrip()
 
 
-# The generated artifact is standalone because it runs in PALADYN's isolated
+# The generated artifact is standalone because it runs in DARKLINGER's isolated
 # sandbox without importing the application package. Its behavior mirrors the
 # trusted builder above and is validated against a literal observed fixture.
 ACCESSIBILITY_PRODUCT_CARD_SOURCE = r'''import re

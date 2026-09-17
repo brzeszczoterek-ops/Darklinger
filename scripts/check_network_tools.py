@@ -1,6 +1,6 @@
 """Opt-in, fixed-target browser smoke checks; never scans or submits forms.
 
-Run from an installed PALADYN environment with --allow-public-network and the
+Run from an installed DARKLINGER environment with --allow-public-network and the
 path to an already installed Playwright MCP cli.js. No browser is installed by
 this script, and no existing browser profile is attached.
 """
@@ -45,7 +45,7 @@ async def check_network_tools(tools, *, timeout=30):
 
     async def unavailable():
         try:
-            await tools.web_read('https://paladyn-selftest.invalid/')
+            await tools.web_read('https://darklinger-selftest.invalid/')
         except MCPToolExecutionError:
             return 'The reserved invalid domain produced a controlled browser error, not a successful page.'
         raise AssertionError('Unavailable page was returned as a successful read')

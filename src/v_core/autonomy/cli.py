@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 
 import typer
+
+from ..branding import env_value
 from rich.console import Console
 
 from .control import ControlChannel, GlobalControlChannel
@@ -18,7 +20,7 @@ console = Console()
 
 
 def default_root() -> Path:
-    return Path(os.getenv("PALADYN_AUTONOMY_ROOT", "autonomy")).expanduser()
+    return Path(env_value("DARKLINGER_AUTONOMY_ROOT", "autonomy")).expanduser()
 
 
 @app.command("signal")

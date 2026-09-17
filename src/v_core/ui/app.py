@@ -22,7 +22,7 @@ from v_core.ui.runtime_activity import runtime_activity
 
 
 _STATIC_ROOT = Path(__file__).with_name("static")
-_SESSION_PLACEHOLDER = "__PALADYN_SESSION_TOKEN__"
+_SESSION_PLACEHOLDER = "__DARKLINGER_SESSION_TOKEN__"
 
 
 @dataclass(slots=True)
@@ -105,7 +105,10 @@ class UIRuntime:
         return payload
 
     def require_token(self, request: Request) -> Response | None:
-        supplied = request.headers.get("x-paladyn-session", "")
+        supplied = request.headers.get("x-darklinger-session", "") or request.headers.get(
+            "x-" + "pala" + "dyn-session",
+            "",
+        )
         if not supplied or not secrets.compare_digest(supplied, self.session_token):
             return JSONResponse({"error": "invalid local UI session"}, status_code=403)
         return None

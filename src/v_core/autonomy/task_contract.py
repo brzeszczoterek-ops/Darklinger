@@ -414,7 +414,7 @@ _GROUNDING_ENTITY_STOPWORDS = {
     "another", "based", "boss", "description", "feature", "features",
     "first", "finally", "here", "however", "key",
     "english", "finding", "findings", "lastly", "next", "okay", "open",
-    "paladyn", "please", "response", "result", "results", "second",
+    "darklinger", "please", "response", "result", "results", "second",
     "section", "sections", "source", "sources", "still", "the", "therefore",
     "this", "third", "verified", "would",
 }
@@ -2377,7 +2377,7 @@ class TaskContract:
                     records = result.get("records")
                     if isinstance(records, list) and records:
                         lines = [
-                            f"Done. PALADYN {lifecycle} `{created_name}`, then "
+                            f"Done. DARKLINGER {lifecycle} `{created_name}`, then "
                             "executed it on the runtime-observed page data.",
                             "",
                             "Verified first three records:",
@@ -2405,7 +2405,7 @@ class TaskContract:
                             lines.append(f"{number}. {fields}")
                         return "\n".join(lines)
                     return (
-                        f"Done. PALADYN {lifecycle} `{created_name}`, then "
+                        f"Done. DARKLINGER {lifecycle} `{created_name}`, then "
                         "executed it successfully. Verified result:\n\n"
                         + json.dumps(result, ensure_ascii=False, sort_keys=True)
                     )
@@ -2457,7 +2457,7 @@ class TaskContract:
                         else f" Recorded task executions: {runs}."
                     )
                     return (
-                        "PALADYN built, sandbox-tested, and activated the experimental "
+                        "DARKLINGER built, sandbox-tested, and activated the experimental "
                         f"tool `{payload['name']}`. Determinism and input sensitivity "
                         "passed, but no independent semantic oracle has proven its "
                         "domain correctness yet."
@@ -2470,7 +2470,7 @@ class TaskContract:
                     else ""
                 )
                 return (
-                    f"Done. PALADYN built the generated tool, validated, and activated "
+                    f"Done. DARKLINGER built the generated tool, validated, and activated "
                     f"`{payload['name']}` from the generated source."
                     + test_report
                     + coverage_note

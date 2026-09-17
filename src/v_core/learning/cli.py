@@ -4,6 +4,8 @@ import argparse
 import json
 import os
 from pathlib import Path
+
+from ..branding import env_value
 from typing import Sequence
 
 from .audit import audit_learning_store
@@ -11,16 +13,16 @@ from .storage import LearningStore
 
 
 def _root(value: str | None) -> Path:
-    selected = value or os.getenv("PALADYN_LEARNING_ROOT", "learning")
+    selected = value or env_value("DARKLINGER_LEARNING_ROOT", "learning")
     return Path(selected).expanduser().resolve()
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="paladyn-learning",
-        description="Inspect and verify PALADYN's evidence and artifact store.",
+        prog="darklinger-learning",
+        description="Inspect and verify DARKLINGER's evidence and artifact store.",
     )
-    parser.add_argument("--root", help="learning root (default: PALADYN_LEARNING_ROOT)")
+    parser.add_argument("--root", help="learning root (default: DARKLINGER_LEARNING_ROOT)")
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("verify", help="verify journals, records, and bundle digests")
     subcommands.add_parser("artifacts", help="list artifact lifecycle records")

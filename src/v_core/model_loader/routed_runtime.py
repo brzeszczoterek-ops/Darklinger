@@ -111,7 +111,7 @@ class RoutedModelRuntime:
                 routing_strategy=routing_strategy,
             )
             if reason != self._last_unavailable_notice:
-                self.status(f"PALADYN WARNING: {reason}")
+                self.status(f"DARKLINGER WARNING: {reason}")
                 self._last_unavailable_notice = reason
             self._record(prompt, result, trigger=trigger)
             return result

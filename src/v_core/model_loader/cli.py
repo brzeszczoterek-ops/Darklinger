@@ -18,7 +18,7 @@ from .storage import ModelLoaderStore
 
 app = typer.Typer(
     add_completion=False,
-    help="Qualify local GGUF models and configure PALADYN's verified router.",
+    help="Qualify local GGUF models and configure DARKLINGER's verified router.",
 )
 
 
@@ -102,7 +102,7 @@ async def _qualify_model(model: str, *, add_to_pool: bool) -> None:
     profile = state.profiles.get(key) or default_profile(selected)
     binary = find_llama_server(state.server_binary)
     if binary is None:
-        raise typer.BadParameter("llama-server was not found; configure it in PALADYN first")
+        raise typer.BadParameter("llama-server was not found; configure it in DARKLINGER first")
 
     typer.echo(f"Loading {selected.path.name} for qualification...")
     session = await start_llama_server(binary, profile, root, status=typer.echo)

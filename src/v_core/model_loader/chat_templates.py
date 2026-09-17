@@ -1,6 +1,6 @@
 """Trusted model-family chat templates for local llama.cpp profiles.
 
-The templates live in PALADYN rather than being downloaded at startup. A
+The templates live in DARKLINGER rather than being downloaded at startup. A
 profile selects only a reviewed identifier; owners cannot smuggle arbitrary
 Jinja through loader arguments.
 """

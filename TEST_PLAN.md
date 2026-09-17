@@ -5,7 +5,7 @@
 - Run the complete private tree with `pytest -q`; this executes both `v_core`
   and `test/full`.
 - Export a new public tree with `python scripts/export_public.py TARGET` and run
-  its tests with `PALADYN_EDITION=public PYTHONPATH=TARGET/src pytest TARGET/test`.
+  its tests with `DARKLINGER_EDITION=public PYTHONPATH=TARGET/src pytest TARGET/test`.
 - Verify that `src/v_full`, `test/full`, `evm_lab`, Full-only entry points, and
   static `v_full` imports are absent from the public tree.
 - Verify that public configuration rejects `owner_lab`, while Full grants every
@@ -232,7 +232,7 @@ Every item should pass before creating a new release.
 - [x] Real Gemma integration executes one deterministic tool and preserves its
   exact result in the final answer and memory evidence.
 - [x] Real Mythos + llama.cpp integration emits a native `read_file` tool call;
-  PALADYN executes it once and deterministically returns `# PALADYN / V-Core`.
+  DARKLINGER executes it once and deterministically returns `# DARKLINGER / V-Core`.
 
 ---
 
@@ -386,6 +386,6 @@ Before releasing a version:
 - [x] Live owner grants expire within at most 15 minutes.
 - [x] Foundry compilation/fuzz/invariant harness runs offline in Bubblewrap.
 - [x] Real local Anvil pending-block observation and `eth_call` simulation.
-- [x] `paladyn-live` works end to end with a stored owner grant.
+- [x] `darklinger-live` works end to end with a stored owner grant.
 - [ ] Rootless container backend with seccomp and cgroup-v2 quotas.
 - [ ] MicroVM backend for hostile native binaries.

@@ -269,7 +269,7 @@ class ToolManifest:
         object.__setattr__(self, "provides_capabilities", capabilities)
         ticket_id = clean_text(self.repair_ticket_id, maximum=64)
         if ticket_id and not re.fullmatch(r"[0-9a-f]{32}", ticket_id):
-            raise ValueError("repair_ticket_id must be a PALADYN recovery ticket ID")
+            raise ValueError("repair_ticket_id must be a DARKLINGER recovery ticket ID")
         object.__setattr__(self, "repair_ticket_id", ticket_id)
 
     def to_dict(self) -> dict[str, Any]:

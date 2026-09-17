@@ -192,7 +192,7 @@ def runtime_activity(
     sample_now: float | None = None,
     http_json: Callable[[int, str], Any] = _http_json,
 ) -> dict[str, Any]:
-    """Build one factual live view from llama.cpp and PALADYN's task ledger."""
+    """Build one factual live view from llama.cpp and DARKLINGER's task ledger."""
 
     root = Path(autonomy_root).expanduser() if autonomy_root else None
     checkpoint: dict[str, Any] = {}

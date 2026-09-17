@@ -70,7 +70,7 @@ class LLMToolCall:
 
 @dataclass(slots=True)
 class LLMResponse:
-    """Provider-neutral assistant response used by PALADYN's executor."""
+    """Provider-neutral assistant response used by DARKLINGER's executor."""
 
     content: str = ""
     tool_calls: list[LLMToolCall] = field(default_factory=list)
@@ -85,7 +85,7 @@ class LLM:
         self.config = load_llm_config()
         self.client = self._new_client()
         # None means untested. A strict/older GGUF template may reject the
-        # OpenAI tool schema; after one explicit provider rejection PALADYN
+        # OpenAI tool schema; after one explicit provider rejection DARKLINGER
         # uses its documented textual compatibility protocol for that run.
         self._native_tools_supported: bool | None = None
 
@@ -96,13 +96,13 @@ class LLM:
             timeout=float(os.getenv("V_CORE_TIMEOUT", "300")),
             # The OpenAI client retries transport timeouts by default. Against
             # one local llama.cpp slot that silently restarts the same long
-            # generation multiple times and makes PALADYN look frozen. Agent
+            # generation multiple times and makes DARKLINGER look frozen. Agent
             # recovery is explicit and journalled, so transport retry stays off.
             max_retries=max(0, int(os.getenv("V_CORE_HTTP_RETRIES", "0"))),
         )
 
     async def reconfigure(self, config: LLMConfig | None = None) -> None:
-        """Point all shared PALADYN components at a newly selected local model."""
+        """Point all shared DARKLINGER components at a newly selected local model."""
 
         previous = self.client
         self.config = config or load_llm_config()
@@ -205,7 +205,7 @@ class LLM:
                 raise
 
             # A malformed native call is rejected by llama.cpp before its
-            # partial arguments reach PALADYN, so the normal argument validator
+            # partial arguments reach DARKLINGER, so the normal argument validator
             # cannot repair it. Retry this turn once through the compact textual
             # compatibility protocol. Unlike a template rejection, this does not
             # disable native tools for later turns: the template supports tools;

@@ -24,7 +24,7 @@ Never answer the question.
 
 
 TOOL_PROMPT = """
-You are the PALADYN Tool Dispatcher.
+You are the DARKLINGER Tool Dispatcher.
 
 The router has already decided that a tool IS required.
 
@@ -53,10 +53,10 @@ Generated capability examples:
 
 Use learning_create_tool for a complete general generated-tool lifecycle. Supply
 name, description, Python source defining `run(arguments)`, and one concrete
-input/output test; PALADYN derives the strict schemas.
+input/output test; DARKLINGER derives the strict schemas.
 
 Use learning_create_snapshot_extractor for accessibility product-card text.
-Supply only the generated tool name. PALADYN binds the latest observed browser
+Supply only the generated tool name. DARKLINGER binds the latest observed browser
 snapshot, writes the deterministic parser and regression fixture, tests it in
 quarantine, and activates it.
 
@@ -76,7 +76,7 @@ Rules:
 - Use browser tools whenever the task involves websites, web pages, searching page content or navigation.
 - Use filesystem tools only for local files.
 - Generated capabilities must use the learning lifecycle; never use write_file
-  to place executable code into PALADYN's source tree.
+  to place executable code into DARKLINGER's source tree.
 
 """.strip()
 

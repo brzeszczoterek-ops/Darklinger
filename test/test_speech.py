@@ -85,12 +85,12 @@ def test_voice_selection_loads_relative_paths_and_effects(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("PALADYN_RECORDER", str(paths["pw-record"]))
-    monkeypatch.setenv("PALADYN_PLAYER", str(paths["pw-play"]))
-    monkeypatch.setenv("PALADYN_WHISPER_CLI", str(paths["whisper-cli"]))
-    monkeypatch.setenv("PALADYN_WHISPER_MODEL", "models/whisper.bin")
-    monkeypatch.setenv("PALADYN_PIPER", str(paths["piper"]))
-    monkeypatch.setenv("PALADYN_SOX", str(paths["sox"]))
+    monkeypatch.setenv("DARKLINGER_RECORDER", str(paths["pw-record"]))
+    monkeypatch.setenv("DARKLINGER_PLAYER", str(paths["pw-play"]))
+    monkeypatch.setenv("DARKLINGER_WHISPER_CLI", str(paths["whisper-cli"]))
+    monkeypatch.setenv("DARKLINGER_WHISPER_MODEL", "models/whisper.bin")
+    monkeypatch.setenv("DARKLINGER_PIPER", str(paths["piper"]))
+    monkeypatch.setenv("DARKLINGER_SOX", str(paths["sox"]))
 
     config = SpeechConfig.load(tmp_path)
 
@@ -164,23 +164,23 @@ def test_kokoro_voice_loads_isolated_runtime_and_piper_fallback(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("PALADYN_RECORDER", str(commands / "pw-record"))
-    monkeypatch.setenv("PALADYN_PLAYER", str(commands / "pw-play"))
-    monkeypatch.setenv("PALADYN_WHISPER_CLI", str(commands / "whisper-cli"))
-    monkeypatch.setenv("PALADYN_WHISPER_MODEL", "models/whisper.bin")
-    monkeypatch.setenv("PALADYN_WHISPER_LANGUAGE", "pl")
-    monkeypatch.setenv("PALADYN_WHISPER_THREADS", "6")
+    monkeypatch.setenv("DARKLINGER_RECORDER", str(commands / "pw-record"))
+    monkeypatch.setenv("DARKLINGER_PLAYER", str(commands / "pw-play"))
+    monkeypatch.setenv("DARKLINGER_WHISPER_CLI", str(commands / "whisper-cli"))
+    monkeypatch.setenv("DARKLINGER_WHISPER_MODEL", "models/whisper.bin")
+    monkeypatch.setenv("DARKLINGER_WHISPER_LANGUAGE", "pl")
+    monkeypatch.setenv("DARKLINGER_WHISPER_THREADS", "6")
     monkeypatch.setenv(
-        "PALADYN_WHISPER_INITIAL_PROMPT", "V, PALADYN, Brzeszczot"
+        "DARKLINGER_WHISPER_INITIAL_PROMPT", "V, DARKLINGER, Brzeszczot"
     )
     monkeypatch.setenv(
-        "PALADYN_WHISPER_FALLBACK_CLI", str(commands / "whisper-fallback")
+        "DARKLINGER_WHISPER_FALLBACK_CLI", str(commands / "whisper-fallback")
     )
     monkeypatch.setenv(
-        "PALADYN_WHISPER_FALLBACK_MODEL", "models/whisper-fallback.bin"
+        "DARKLINGER_WHISPER_FALLBACK_MODEL", "models/whisper-fallback.bin"
     )
-    monkeypatch.setenv("PALADYN_PIPER", str(commands / "piper"))
-    monkeypatch.setenv("PALADYN_SOX", str(commands / "sox"))
+    monkeypatch.setenv("DARKLINGER_PIPER", str(commands / "piper"))
+    monkeypatch.setenv("DARKLINGER_SOX", str(commands / "sox"))
 
     config = SpeechConfig.load(tmp_path)
 
@@ -193,7 +193,7 @@ def test_kokoro_voice_loads_isolated_runtime_and_piper_fallback(
     assert config.voice.fallback.model == (models / "fallback.onnx").resolve()
     assert config.whisper_language == "pl"
     assert config.whisper_threads == 6
-    assert config.whisper_initial_prompt == "V, PALADYN, Brzeszczot"
+    assert config.whisper_initial_prompt == "V, DARKLINGER, Brzeszczot"
     assert config.whisper_fallback_cli == (commands / "whisper-fallback").absolute()
     assert config.whisper_fallback_model == (
         models / "whisper-fallback.bin"
@@ -207,17 +207,17 @@ def test_kokoro_voice_loads_isolated_runtime_and_piper_fallback(
     assert command[command.index("--language") + 1] == "pl"
     assert command[command.index("--threads") + 1] == "6"
     assert "--flash-attn" in command
-    assert command[command.index("--prompt") + 1] == "V, PALADYN, Brzeszczot"
+    assert command[command.index("--prompt") + 1] == "V, DARKLINGER, Brzeszczot"
 
 
 def test_spoken_text_removes_terminal_only_markup() -> None:
     prepared = SpeechRuntime._prepare_spoken_text(
-        "## Result\nUse [`PALADYN`](https://example.com).\n"
+        "## Result\nUse [`DARKLINGER`](https://example.com).\n"
         "```python\nprint('terminal only')\n```"
     )
 
     assert prepared == (
-        "Result Use PALADYN. I left the code block in the terminal."
+        "Result Use DARKLINGER. I left the code block in the terminal."
     )
 
 
@@ -232,7 +232,7 @@ async def test_whisper_uses_cpu_fallback_after_primary_failure(
         whisper_fallback_model=tmp_path / "base.bin",
         whisper_language="pl",
         whisper_threads=6,
-        whisper_initial_prompt="V, PALADYN, Brzeszczot",
+        whisper_initial_prompt="V, DARKLINGER, Brzeszczot",
         maximum_record_seconds=60,
     )
     runtime = SpeechRuntime(config)
@@ -274,7 +274,7 @@ def test_f2_binds_to_immediate_push_to_talk_command() -> None:
     bindings: list[str] = []
 
     key = _configure_push_to_talk_hotkey(
-        environ={"PALADYN_PTT_KEY": "f2"},
+        environ={"DARKLINGER_PTT_KEY": "f2"},
         bind=bindings.append,
         stdin_is_tty=True,
     )
@@ -302,7 +302,7 @@ def test_f2_is_the_default_push_to_talk_key() -> None:
 def test_push_to_talk_hotkey_is_disabled_for_noninteractive_input() -> None:
     assert (
         _configure_push_to_talk_hotkey(
-            environ={"PALADYN_PTT_KEY": "F2"},
+            environ={"DARKLINGER_PTT_KEY": "F2"},
             bind=lambda _: None,
             stdin_is_tty=False,
         )

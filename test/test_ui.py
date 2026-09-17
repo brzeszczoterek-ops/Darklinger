@@ -31,7 +31,7 @@ def test_draft_events_are_separate_from_verified_speech_and_result():
     runtime.core.ask = ask
     runtime.speech = SimpleNamespace(speak=speak)
     response = TestClient(create_app(runtime)).post(
-        "/api/chat", headers={"X-PALADYN-Session": runtime.session_token},
+        "/api/chat", headers={"X-DARKLINGER-Session": runtime.session_token},
         json={"message": "review", "speak": True},
     )
     events = [json.loads(line) for line in response.text.splitlines()]
@@ -98,7 +98,7 @@ def test_ui_is_local_session_token_protected() -> None:
     denied = client.get("/api/status")
     accepted = client.get(
         "/api/status",
-        headers={"X-PALADYN-Session": runtime.session_token},
+        headers={"X-DARKLINGER-Session": runtime.session_token},
     )
 
     assert index.status_code == 200
@@ -109,6 +109,26 @@ def test_ui_is_local_session_token_protected() -> None:
     assert accepted.json()["edition"] == "public"
     assert accepted.json()["model"]["alias"] == "test-model"
     assert accepted.json()["owner"] is None
+
+
+def test_ui_uses_darklinger_public_identity() -> None:
+    index = TestClient(create_app(_runtime())).get("/")
+
+    assert index.status_code == 200
+    assert "<title>DARKLINGER // V</title>" in index.text
+    assert '<div class="brand-mark">D</div>' in index.text
+    assert "<h1>DARKLINGER <span>// V</span></h1>" in index.text
+    assert "Hold to stop Darklinger and its model" in index.text
+
+
+def test_ui_accepts_legacy_session_header_during_rename() -> None:
+    runtime = _runtime()
+    response = TestClient(create_app(runtime)).get(
+        "/api/status",
+        headers={"X-PALADYN-Session": runtime.session_token},
+    )
+
+    assert response.status_code == 200
 
 
 def test_ui_uses_independent_scroll_regions_and_fixed_composer() -> None:
@@ -345,7 +365,7 @@ def test_ui_streams_v_response_as_ndjson() -> None:
     with client.stream(
         "POST",
         "/api/chat",
-        headers={"X-PALADYN-Session": runtime.session_token},
+        headers={"X-DARKLINGER-Session": runtime.session_token},
         json={"message": "hello", "speak": False},
     ) as response:
         events = [line for line in response.iter_lines() if line]
@@ -365,7 +385,7 @@ def test_ui_shutdown_uses_server_callback() -> None:
 
     response = client.post(
         "/api/shutdown",
-        headers={"X-PALADYN-Session": runtime.session_token},
+        headers={"X-DARKLINGER-Session": runtime.session_token},
         json={},
     )
 

@@ -1,6 +1,6 @@
-# PALADYN editions
+# DARKLINGER editions
 
-PALADYN's distribution boundary is based on operational capability, not on
+DARKLINGER's distribution boundary is based on operational capability, not on
 conversation topics or artificial product degradation.
 
 ## Public
@@ -11,7 +11,7 @@ three models, memory and relationship development, evidence-based learning,
 bounded autonomous tasks, browser and workspace tools, and generated tools
 executed in the restricted sandbox.
 
-Public PALADYN contains only `src/v_core`. Requesting `PALADYN_EDITION=full` or
+Public DARKLINGER contains only `src/v_core`. Requesting `DARKLINGER_EDITION=full` or
 an `owner_lab` profile without the private package fails closed.
 
 ## Full
@@ -26,7 +26,7 @@ status/search/fetch operations,
 not a shell or general package installer; generated tools remain offline. These
 capabilities are registered through the edition-extension contract; `v_core`
 does not import their implementations directly. The shared graphical shell asks
-that extension for an optional UI contribution. Public PALADYN receives none;
+that extension for an optional UI contribution. Public DARKLINGER receives none;
 Full supplies the private Owner Deck and its local operational status.
 
 Both editions retain the execution-evidence contract, external emergency stop,
@@ -57,7 +57,7 @@ the audit entry.
 Run the exporter from the private repository:
 
 ```bash
-python scripts/export_public.py /path/to/empty/PALADYN-public
+python scripts/export_public.py /path/to/empty/DARKLINGER-public
 ```
 
 The target must be new or an earlier directory created by this exporter. The

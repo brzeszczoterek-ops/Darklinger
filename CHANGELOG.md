@@ -3,6 +3,10 @@
 ## Unreleased
 
 ### Added
+- The staged product rename has begun: user-facing application identity now
+  reads **Darklinger**. Canonical commands and settings now use `darklinger-*`
+  and `DARKLINGER_*`; the former `paladyn-*` and `PALADYN_*` forms remain
+  temporary aliases so existing installations keep their state during upgrade.
 - A shared outcome-based content contract now separates operational real-world
   harm from fiction, research, journalism, defensive analysis, and other safe
   adjacent work. Public keeps restricted generated-code authority; Full adds a
@@ -76,7 +80,7 @@
 - A failed Tor inventory now reports its concrete record-level connection error
   instead of hiding a timeout behind a generic non-success status.
 - Tor inventory evidence is compacted into valid bounded JSON before entering
-  the agent trace. Once the evidence contract is satisfied, PALADYN renders a
+  the agent trace. Once the evidence contract is satisfied, DARKLINGER renders a
   deterministic report from those observations instead of asking the model to
   reinterpret them. Unsupported safety, ownership, or unseen-content claims
   therefore cannot leak into the final report.
@@ -85,10 +89,14 @@
   reserved for an explicit CAPTCHA, private window, or interactive session.
 
 ### Verification scope
+- The complete rename migration passed 1088 Full and 1015 freshly exported
+  Public tests on 2026-09-17. Both canonical and transition command names were
+  installed in the editable environment, and both canonical and legacy
+  configuration prefixes resolved with canonical precedence.
 - On 2026-09-17, 1083 Full and 1010 freshly exported Public tests passed. A
   fresh Mythos run searched GitHub, opened and captured two repository pages,
   returned their exact identifiers as approval candidates, excluded unrelated
-  articles, and installed nothing. PALADYN, the model, and the monitor were
+  articles, and installed nothing. DARKLINGER, the model, and the monitor were
   stopped cleanly after the trial.
 - On 2026-09-16, 1012 Full and 943 freshly exported Public tests passed. An isolated replay of a previously
   failed live HAR draft passed sandbox validation, a separate final input, an
@@ -121,7 +129,7 @@
 
 ### Added
 - Natural-language generated-tool test contracts. Before code generation,
-  PALADYN can normalize owner-stated examples and a separate final invocation
+  DARKLINGER can normalize owner-stated examples and a separate final invocation
   in any model-understood language, then freezes them in runtime state. Every
   accepted value must occur in an exact quote from the current owner message;
   inconsistent, fabricated, or ambiguous fixtures stop before source creation.
@@ -137,7 +145,7 @@
 
 ### Fixed
 - Generated-source responses may contain surrounding prose or repeated identical
-  Python fences without being discarded. PALADYN accepts exactly one distinct
+  Python fences without being discarded. DARKLINGER accepts exactly one distinct
   valid `run(arguments)` module and still rejects multiple different valid
   candidates as ambiguous.
 - Source-draft parse failures now consume the same bounded creation-attempt and
@@ -147,7 +155,7 @@
   tests/activation/final invocation from `run`, and uses a smaller response
   budget. Runtime validation and activation remain separate and authoritative.
 - A successfully executed newly created tool now satisfies the execution part
-  of its own creation contract. PALADYN no longer launches an unrelated extra
+  of its own creation contract. DARKLINGER no longer launches an unrelated extra
   sandbox command after the requested generated tool has already run.
 - Runtime-bound first execution of a newly activated tool no longer hot-swaps
   to a tool-use model merely to transport arguments the runtime already owns.
@@ -204,14 +212,14 @@
   snapshots, unavailable-domain errors, search results, and a grounded IANA
   page read in an isolated browser profile. It is separate from automatic local
   tool checks and does not use accounts, forms, or generated tools.
-- PALADYN-Full manual model hierarchy: owners can persist the exact priority
+- DARKLINGER-Full manual model hierarchy: owners can persist the exact priority
   and fallback order of the qualified three-model pool; Public hides the menu
   and ignores a transferred Full-only strategy in favor of automatic scoring
 - Universal capability-based tool recovery: runtime-owned provider health,
   bounded failover between equivalent providers, persistent recovery tickets,
   and capability-based task completion instead of dependence on one tool name
 - A replay-gated repair lifecycle for generated tools: V can build a replacement
-  from a real local failure fixture, while PALADYN owns quarantine, sandbox
+  from a real local failure fixture, while DARKLINGER owns quarantine, sandbox
   validation, activation, health tracking, and automatic rollback
 - Recovery fixtures redact credential-like fields; offline generated repairs
   cannot claim host, network, filesystem, policy, or edition capabilities
@@ -249,7 +257,7 @@
   documentation sections, reject private paths/static imports, and refuse to
   overwrite an unrelated directory
 - Separate Public and Full test surfaces, including a real exported-tree test
-  proving that public PALADYN imports and runs without the private package
+  proving that public DARKLINGER imports and runs without the private package
 - The interactive startup menu can qualify or requalify any detected GGUF,
   display its complete capability card, add it to a free routing slot, configure
   a one-to-three-model pool, or disable routing without requiring CLI commands
@@ -280,27 +288,27 @@
 - Deterministic one-model-at-a-time routing across at most three qualified local
   models, with profile invalidation, verified fallbacks, a shared reconfigurable
   LLM client, and private prompt-digest journals
-- The `paladyn-model` operator CLI for qualification, pool configuration,
+- The `darklinger-model` operator CLI for qualification, pool configuration,
   routing control, model inventory, and dry-run route inspection
 - A source-owned generated-tool lifecycle: the LLM now emits Python only, while
-  PALADYN derives the manifest, strict schemas, owner-oracle or deterministic
+  DARKLINGER derives the manifest, strict schemas, owner-oracle or deterministic
   smoke tests, activation, post-activation invocation, and verified report
 - Model-profile chat-template selection with automatic Hermes 3 detection and a
   vendored, reviewed `tool_use` template, keeping startup fully offline while
   allowing llama.cpp to emit native function calls for that model family
-- A domain-independent structured-fixture protocol for generated tools: PALADYN
+- A domain-independent structured-fixture protocol for generated tools: DARKLINGER
   binds exact JSON inputs and expected results from the owner request, validates
   on the first fixture, and executes an activated tool on the last fixture
-- High-level `web_search` and `web_read` tools: PALADYN now turns a focused
+- High-level `web_search` and `web_read` tools: DARKLINGER now turns a focused
   DuckDuckGo query into grounded result URLs, opens an exact observed result,
   and rejects detail addresses invented by the model
 - Model-level V identity primer loaded by the local llama-server at process
   startup through a private `--system-prompt-file`; the same short anchor is
-  applied before PALADYN's detailed persona across compatible GGUF templates
+  applied before DARKLINGER's detailed persona across compatible GGUF templates
 - Live, per-task browser audit in the owner monitor, showing every requested
   URL, redirect, tool outcome, and actual HTTP status without mixing in visits
   from older tasks
-- Read-only self-review of PALADYN's prior task logs through
+- Read-only self-review of DARKLINGER's prior task logs through
   `runtime_review_task`, with bounded runtime-grounded findings that cite exact
   tool-call and context-rollover numbers
 
@@ -309,7 +317,7 @@
   demonstrated answer are rejected before staging; explicit offline/no-web
   constraints also survive semantic routing and remove browser capabilities
 - Source generation receives no callable tools, accepts a narrowly parsed legacy
-  wrapper from models trained to emit function envelopes, and PALADYN—not the
+  wrapper from models trained to emit function envelopes, and DARKLINGER—not the
   model—binds and executes the newly activated artifact
 - Generated-artifact phases now force the required lifecycle builder at the
   provider boundary, reject calls to a not-yet-activated artifact, and recover
@@ -338,7 +346,7 @@
 - Push-to-talk now defaults to `F2` in both the runtime and desktop launcher;
   terminal bindings accept the common SS3 and CSI `F2` escape sequences
 - Empty action acknowledgements such as “I know exactly what you want. Let's do
-  it.” can no longer complete a task without execution; PALADYN rejects the
+  it.” can no longer complete a task without execution; DARKLINGER rejects the
   empty enthusiasm and keeps the runtime loop open for a real tool call
 - Runtime-owned failure, evidence, loop, and step-boundary messages keep their
   exact operational truth while speaking in V's direct voice instead of falling
@@ -356,7 +364,7 @@
   previous task checkpoints, execution memory, agent instructions, and tool
   schemas can no longer hijack casual banter or mangled speech
 - When a local intent parser copies an unrelated previous subject into a new
-  utterance, PALADYN now asks Boss to repeat it instead of letting the main model
+  utterance, DARKLINGER now asks Boss to repeat it instead of letting the main model
   fake understanding; routine context rollovers are also skipped when they save
   only a negligible number of tokens
 - A non-continuation intent must ground its subject and search query in the
@@ -367,7 +375,7 @@
   product page can no longer satisfy a location-information contract by itself
 - Public-fact commands now use language-independent normalized intent fields;
   when a local classifier contradicts its own browser/report/query structure,
-  PALADYN repairs the structural contradiction rather than matching one language
+  DARKLINGER repairs the structural contradiction rather than matching one language
 - Public-fact evidence is bound to the router's exact named subject, preventing
   an address or opening time for a similarly named business from completing the
   wrong task
@@ -377,14 +385,14 @@
   wait before voice validation without reducing tool-generation budgets
 - URLs copied imperfectly by a local model are now mapped back only when they
   match exactly one previously observed search result after separator cleanup;
-  PALADYN opens that grounded URL instead of repeating the same web search
+  DARKLINGER opens that grounded URL instead of repeating the same web search
 - Background learning no longer sends every historical experience and knowledge
   entry to the model: each memory stage now uses a bounded newest-first evidence
   slice, preventing accumulated memory from overflowing the model context
 - Concrete public-fact lookups requesting multiple fields such as location
   count, opening hours, and addresses recover a browser execution contract when
   a local model incorrectly classifies the command as ordinary conversation
-- Exiting PALADYN now terminates the complete local session, including an exact
+- Exiting DARKLINGER now terminates the complete local session, including an exact
   matching llama-server adopted from an interrupted earlier run, releasing VRAM
   and closing the owner monitor instead of leaving orphan processes behind
 - Conditional requests such as “find an alternative; create a tool only if none
@@ -403,9 +411,9 @@
   of being silently forgotten
 - V's voice gate rejects service-desk endings such as “If you'd like, I can...”
   and “What would you prefer?”
-- Interactive checkpoints abandoned by a dead PALADYN process are recovered as
+- Interactive checkpoints abandoned by a dead DARKLINGER process are recovered as
   interrupted on the next start instead of remaining permanently `running`
-- Once a task's runtime evidence contract is satisfied, PALADYN closes tool
+- Once a task's runtime evidence contract is satisfied, DARKLINGER closes tool
   execution and reserves two tool-free turns for the final report; continued
   tool requests are rejected and fall back to a deterministic evidence summary
 - Browser snapshots are rejected after failed navigation until a working URL is
@@ -431,7 +439,7 @@
   action that failed twice is rejected before another external call, and browser
   recovery directs the model to real search results instead of domain guessing
 - Online discovery without an owner-supplied address now starts from DuckDuckGo;
-  when an initial direct navigation fails before any page opens, PALADYN also
+  when an initial direct navigation fails before any page opens, DARKLINGER also
   falls back to DuckDuckGo instead of letting the model mutate the dead hostname
 - Language-independent browser intent now preserves the same discovery rule,
   Google detours during discovery are redirected back to DuckDuckGo even after a
@@ -484,7 +492,7 @@
 - Active generated-tool dispatch and matching skill injection into V's prompt
 - Automatic generated-tool retirement after repeated runtime failures
 - Hash-chained evidence and artifact audit journals
-- `paladyn-learning` integrity and inspection CLI
+- `darklinger-learning` integrity and inspection CLI
 - Bounded schemas, manifests, source, invocation data, workspace growth, and
   process counts for generated-code execution
 - Cross-process locking for evidence, lesson, artifact, and lifecycle updates
@@ -524,11 +532,11 @@
   exact bounded error while replacing private invocation arguments with a digest
 - An owner-approved privileged generated-code policy: `owner_lab` may autonomously
   create and persist tools using arbitrary Python imports, file operations,
-  subprocesses, and dynamic execution inside PALADYN's audited offline sandbox;
+  subprocesses, and dynamic execution inside DARKLINGER's audited offline sandbox;
   `client` retains the restricted source policy and lesson promotion gate
 - A fail-closed Bubblewrap recovery path for AppArmor loopback failures that
   retains filesystem/process isolation and blocks networking with libseccomp
-- A PALADYN AppArmor launch profile for Ubuntu systems that restrict
+- A DARKLINGER AppArmor launch profile for Ubuntu systems that restrict
   unprivileged user namespaces required by Bubblewrap
 
 ### Fixed
@@ -656,11 +664,11 @@
 - Local EVM and sandbox tools exposed to the agent runtime
 - Global latched PANIC across every autonomous task
 - Linux input-event emergency chord (`Q+P+0` by default)
-- PID plus process-start validation before terminating PALADYN runtimes
+- PID plus process-start validation before terminating DARKLINGER runtimes
 - Short-lived live-chain owner grants separated into observe, simulate, sign,
   and broadcast actions
 - Private, expiring live-grant store and owner CLI commands
-- Separate read-only `paladyn-live` RPC observer/simulator
+- Separate read-only `darklinger-live` RPC observer/simulator
 - Chain-ID enforcement and JSON-RPC method allowlisting
 - Offline Foundry runner with pinned read-only forge/solc binaries
 - Dependency-free Solidity unit, fuzz, and invariant harness
@@ -675,11 +683,11 @@
 - Preferred forms of address cannot be accepted from unsupported inferences
 - Relationship evidence is delimited as untrusted data in model prompts
 - Non-finite confidence and relationship values are rejected or normalized
-- Real-Anvil readiness test now handles PALADYN's RPC error boundary reliably
+- Real-Anvil readiness test now handles DARKLINGER's RPC error boundary reliably
 
 ## 1.0.0
 
-First stable foundation for continued PALADYN development.
+First stable foundation for continued DARKLINGER development.
 
 ### Added
 - V constitution separated from identity and speaking style

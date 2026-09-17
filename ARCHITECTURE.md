@@ -150,7 +150,7 @@ Responsible only for communication with MCP servers.
 ## Interactive execution evidence
 
 Every substantive interactive agent task receives a runtime-generated task ID.
-PALADYN writes an atomic mode-0600 checkpoint and an append-only mode-0600 JSONL
+DARKLINGER writes an atomic mode-0600 checkpoint and an append-only mode-0600 JSONL
 journal under the autonomy root. Tool start, success, and failure events come
 from the runtime around the actual `tools.call()` boundary; a model cannot create
 them by printing prose or JSON.
@@ -233,7 +233,7 @@ completed-response timings from the private server log and local Jetson
 `tegrastats`. It receives the model PID, port, profile metadata, and log path as
 an argument array; it cannot change model properties or invoke agent tools.
 
-The feature is disabled unless `PALADYN_OWNER_MONITOR` is explicitly enabled.
+The feature is disabled unless `DARKLINGER_OWNER_MONITOR` is explicitly enabled.
 The private owner launcher may enable it while public/client configurations
 leave it off. The window terminates when the model PID no longer exists.
 
@@ -275,7 +275,7 @@ Each task owns:
 - an atomic JSON checkpoint;
 - an append-only JSONL action journal;
 - a control channel for `PAUSE`, `RESUME`, `STOP`, and `PANIC`;
-- a task workspace separated from protected PALADYN state.
+- a task workspace separated from protected DARKLINGER state.
 
 The autonomous runner checks control signals during active steps and cancels
 in-flight work on `STOP` or `PANIC`. The LLM does not own this mechanism and
@@ -287,7 +287,7 @@ input-event watcher detects a real simultaneous key chord and then:
 
 1. writes the global panic latch consumed by every runner;
 2. cancels all active task steps;
-3. terminates registered PALADYN processes after validating both PID and Linux
+3. terminates registered DARKLINGER processes after validating both PID and Linux
    process start identity, preventing stale-PID termination.
 
 The latch survives the stopped process and requires an explicit owner reset.
@@ -314,7 +314,7 @@ current request. Neither artifact type can modify its own validator, the
 authorization model, persona, or emergency controls.
 
 The autonomous generated-tool boundary is deliberately asymmetric. The LLM is
-a source-code synthesizer only. PALADYN extracts the owner fixtures, derives the
+a source-code synthesizer only. DARKLINGER extracts the owner fixtures, derives the
 tool identity and strict schemas, constructs the tests and manifest, validates
 and activates the immutable bundle, binds the post-activation invocation, and
 renders the evidence-backed result. During source synthesis the model receives
@@ -337,7 +337,7 @@ memory, or agent component. It discovers local files by extension and GGUF
 header, ignores auxiliary multimodal projections and later split shards, then
 loads a versioned per-path profile from private runtime state.
 
-PALADYN launches `llama-server` as an argument array without a shell. The model
+DARKLINGER launches `llama-server` as an argument array without a shell. The model
 path, alias, loopback host, and port are controlled fields; remote model flags,
 public binding, server-side tools, model presets, and API-key overrides cannot
 be injected through profile extras. Inherited `LLAMA_ARG_*` variables are
@@ -366,8 +366,8 @@ and routing journals store a prompt digest rather than owner text.
 
 Short chat, explicit tool-result, and research generation use guarded token
 streaming; routine conversation also uses a compact persona prompt. Multi-step
-agent candidates are fully buffered until PALADYN distinguishes a tool request
-from the final answer. PALADYN never streams internal tool-call JSON. A
+agent candidates are fully buffered until DARKLINGER distinguishes a tool request
+from the final answer. DARKLINGER never streams internal tool-call JSON. A
 deterministic repeated-span guard
 terminates clear two-block, three-phrase, or runaway-token loops. Non-streamed
 results pass through the same trimming rule. Recent session turns are selected
@@ -376,7 +376,7 @@ chronological order. Persistent reflection is skipped for
 greetings and runs as cancellable background work for substantive interactions;
 a new user request always takes priority over unfinished reflection.
 
-Before every OpenAI-compatible request, PALADYN normalizes chat history to one
+Before every OpenAI-compatible request, DARKLINGER normalizes chat history to one
 leading `system` message followed by alternating `user` and `assistant` turns.
 The model-specific Jinja template remains the responsibility of `llama-server`
 and the GGUF metadata. This portable role boundary supports strict templates
@@ -412,7 +412,7 @@ Live-chain owner operations use two independent checks:
 Observation never implies signing. A grant contains policy only and never a
 private key. The general agent process will not hold the signer.
 
-The separate `paladyn-live` process currently implements only:
+The separate `darklinger-live` process currently implements only:
 
 - pending-block and Geth txpool observation;
 - transaction lookup;
@@ -434,7 +434,7 @@ Generated and third-party code runs through an external Bubblewrap backend:
 - new user, mount, PID, IPC, UTS, cgroup, and network namespaces;
 - all Linux capabilities dropped and host environment cleared;
 - read-only `/usr`, private `/proc`, `/dev`, `/tmp`, and `/home`;
-- one writable task workspace and no visibility of PALADYN memory, `.env`, SSH,
+- one writable task workspace and no visibility of DARKLINGER memory, `.env`, SSH,
   wallets, or the Docker socket;
 - address-space, CPU, process-count, file-size, open-file, total-workspace,
   wall-clock, and output limits;

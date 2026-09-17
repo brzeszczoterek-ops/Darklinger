@@ -82,8 +82,8 @@ def _same_shape_value_mutations(value: Any) -> list[Any]:
         return [value + 1.0]
     if isinstance(value, str):
         if value:
-            return ["", value + "__paladyn_probe__"]
-        return ["paladyn_probe"]
+            return ["", value + "__darklinger_probe__"]
+        return ["darklinger_probe"]
     if isinstance(value, list):
         mutations: list[Any] = []
         if value:
@@ -570,7 +570,7 @@ class LearningRuntime:
             )
         if name.strip() == ticket.failed_tool:
             raise ArtifactValidationError(
-                "a repair provider needs a distinct tool name so PALADYN can "
+                "a repair provider needs a distinct tool name so DARKLINGER can "
                 "roll back to the previous provider"
             )
         if not isinstance(expected, dict):
@@ -628,7 +628,7 @@ class LearningRuntime:
 
         Identity and fixtures are derived from the immutable interaction objective,
         runtime-observed data, and literal source defaults. If Boss supplied an
-        ``expected = {...}`` oracle, normal validation checks it. Otherwise PALADYN
+        ``expected = {...}`` oracle, normal validation checks it. Otherwise DARKLINGER
         runs the candidate twice offline and then performs bounded input-sensitivity
         probes. A source-only tool without a semantic oracle must consume real input
         and produce a different deterministic result for at least one same-shape
@@ -652,7 +652,7 @@ class LearningRuntime:
             if not blueprint.arguments:
                 raise ArtifactValidationError(
                     "generated tool has no input fields and no owner-specified "
-                    "semantic oracle; PALADYN cannot prove functional behavior "
+                    "semantic oracle; DARKLINGER cannot prove functional behavior "
                     "from a constant no-input result"
                 )
             first = await self._preview_generated_source(
@@ -1003,9 +1003,9 @@ class LearningRuntime:
                 "required_tools": list(manifest.required_tools),
             }
             blocks.append(
-                "<paladyn_skill>\n"
+                "<darklinger_skill>\n"
                 + json.dumps(payload, ensure_ascii=False, sort_keys=True)
-                + "\n</paladyn_skill>"
+                + "\n</darklinger_skill>"
             )
         return "\n".join(blocks)
 
@@ -1144,7 +1144,7 @@ class LearningRuntime:
                         max_workspace_bytes=32 * 1024 * 1024,
                         max_open_files=64,
                         # RLIMIT_NPROC is accounted per host user, not per
-                        # sandbox. Leave room for PALADYN's parallel workers
+                        # sandbox. Leave room for DARKLINGER's parallel workers
                         # while still bounding process explosions.
                         max_processes=256,
                     ),

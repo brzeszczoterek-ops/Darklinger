@@ -412,8 +412,8 @@ For this short conversational reply:
 - Do not invent memories, facts, feelings, or shared history.
 - Initiative is welcome: after giving an idea, you may proactively offer to build
   it. Keep the boundary factual—an offer or proposal is not started or completed
-  work. Claim execution only after PALADYN has matching runtime evidence.
-- PALADYN already has V as its conversational agent. Never suggest adding a chatbot
+  work. Claim execution only after DARKLINGER has matching runtime evidence.
+- DARKLINGER already has V as its conversational agent. Never suggest adding a chatbot
   or AI assistant as if that core capability were missing; improve V's executor,
   routing, memory, evidence, observability, reliability, or tool system instead.
 - Do not blindly agree, but do not manufacture an argument either.
@@ -921,7 +921,7 @@ Current relationship stage: {stage}.
             )
         # Preserve the visible exchange so Boss can clarify naturally on the
         # next turn. Without this, every clarification sees the same empty
-        # ledger and PALADYN traps the conversation in an endless refusal loop.
+        # ledger and DARKLINGER traps the conversation in an endless refusal loop.
         self.memory.session.add(
             "task",
             {"task": prompt, "result": answer},
@@ -1660,7 +1660,7 @@ Current relationship stage: {stage}.
             ).strip()
             # Re-derive structural requirements from the durable objective as
             # well as loading its checkpoint. This upgrades older checkpoints
-            # after PALADYN learns a stronger language-independent completion
+            # after DARKLINGER learns a stronger language-independent completion
             # rule (for example, "create it and show results" also requires
             # executing the created tool).
             if previous_objective:
@@ -2031,7 +2031,7 @@ Current relationship stage: {stage}.
                 if referenced_created_tool not in catalog_names:
                     answer = (
                         "Boss, I resolved the earlier tool, but it is not in "
-                        "PALADYN's executable catalog now. I stopped instead of "
+                        "DARKLINGER's executable catalog now. I stopped instead of "
                         "pretending it ran. Nothing is running in the background."
                     )
                     if trace is not None:
@@ -2567,7 +2567,7 @@ Current relationship stage: {stage}.
                     {
                         "role": "user",
                         "content": (
-                            "PALADYN progress guard: the last successful tool "
+                            "DARKLINGER progress guard: the last successful tool "
                             "calls did not reduce these unmet requirements: "
                             + json.dumps(
                                 list(current_missing), ensure_ascii=False
@@ -2608,7 +2608,7 @@ Current relationship stage: {stage}.
                 # creator again and inviting an unrelated rewrite.
                 final_answer = (
                     "Boss, the tool was created and passed its sandbox checks, "
-                    "but PALADYN's executable catalog did not expose it for the "
+                    "but DARKLINGER's executable catalog did not expose it for the "
                     "required live run. I stopped here instead of generating a "
                     "second tool and pretending that made progress. Nothing is "
                     "running in the background."
@@ -2744,7 +2744,7 @@ Current relationship stage: {stage}.
                     {
                         "role": "user",
                         "content": (
-                            "PALADYN's runtime evidence contract is now satisfied. "
+                            "DARKLINGER's runtime evidence contract is now satisfied. "
                             "Tool execution is closed for this task. Produce the final "
                             "answer now using only the verified tool evidence already "
                             "present. Do not request, describe, or promise another tool "
@@ -3157,7 +3157,7 @@ Current relationship stage: {stage}.
                             {
                                 "role": "user",
                                 "content": (
-                                    "PALADYN rejected that source draft. Return only "
+                                    "DARKLINGER rejected that source draft. Return only "
                                     "valid Python defining synchronous "
                                     "def run(arguments) that returns one JSON object. "
                                     "No prose, JSON envelope, manifest, tests, or tool "
@@ -3221,7 +3221,7 @@ Current relationship stage: {stage}.
                         {
                             "role": "assistant",
                             "content": (
-                                "I attempted another tool call after PALADYN closed "
+                                "I attempted another tool call after DARKLINGER closed "
                                 "tool execution."
                             ),
                         },
@@ -3466,7 +3466,7 @@ Current relationship stage: {stage}.
                                 )
                                 consecutive_execution_rejections = 0
                                 handoff_instruction = (
-                                    " PALADYN runtime handoff: the previous model "
+                                    " DARKLINGER runtime handoff: the previous model "
                                     "was removed from this task phase after repeatedly "
                                     "describing future work without issuing an executable "
                                     "tool call. You inherit the same objective, verified "
@@ -3480,7 +3480,7 @@ Current relationship stage: {stage}.
                             and consecutive_execution_rejections >= 4
                         ):
                             final_answer = (
-                                "PALADYN stopped this execution loop after the active "
+                                "DARKLINGER stopped this execution loop after the active "
                                 "model repeatedly described future work without calling "
                                 "a tool, and no unused qualified fallback model was "
                                 "available. The checkpoint and verified tool evidence "
@@ -3507,7 +3507,7 @@ Current relationship stage: {stage}.
                                 final_answer = (
                                     "I removed the unsupported claims from the two "
                                     "broken rewrites. Here is the report rebuilt "
-                                    "only from evidence PALADYN actually observed:\n\n"
+                                    "only from evidence DARKLINGER actually observed:\n\n"
                                     + self._owner_verified_final_report(
                                         working_summary,
                                         successful_calls,
@@ -3564,7 +3564,7 @@ Current relationship stage: {stage}.
                             evidence = self._block_agent_trace(
                                 trace,
                                 "model claimed execution for a capability "
-                                "PALADYN does not expose: "
+                                "DARKLINGER does not expose: "
                                 + ", ".join(impossible_claims),
                             )
                             await self._remember_task(
@@ -4198,7 +4198,7 @@ Current relationship stage: {stage}.
                         )
                 if consecutive_repeats >= 2 and creation_probe != "changed_model_probe":
                     tool_error = (
-                        "RepeatedToolCallError: PALADYN rejected a third "
+                        "RepeatedToolCallError: DARKLINGER rejected a third "
                         "consecutive request for the same tool with identical "
                         "arguments. Use existing evidence, change strategy, or "
                         "finish truthfully."
@@ -4425,7 +4425,7 @@ Current relationship stage: {stage}.
                             and generated_tool_contract is not None
                             and generated_tool_contract.name_hint
                         ):
-                            # This name belongs to PALADYN's frozen contract,
+                            # This name belongs to DARKLINGER's frozen contract,
                             # so it remains trustworthy even when the verbose
                             # lifecycle JSON is clipped before entering the
                             # model context.
@@ -4750,7 +4750,7 @@ Current relationship stage: {stage}.
                         if isinstance(name, str) and name
                     )
                     tool_message += (
-                        "\nPALADYN phase correction: that function is closed for "
+                        "\nDARKLINGER phase correction: that function is closed for "
                         "this task phase. Do not request it again. The only "
                         "currently executable functions are: "
                         + (", ".join(exposed) if exposed else "none")
@@ -4762,16 +4762,16 @@ Current relationship stage: {stage}.
                     ticket_id = str(recovery_ticket.get("ticket_id", ""))
                     if capability.startswith("generated."):
                         tool_message += (
-                            "\nPALADYN opened recovery ticket "
+                            "\nDARKLINGER opened recovery ticket "
                             f"{ticket_id} for {capability}. If this capability is "
                             "still required, create a corrected replacement with "
-                            "learning_create_repair_adapter. PALADYN will replay the "
+                            "learning_create_repair_adapter. DARKLINGER will replay the "
                             "runtime-owned failure fixture in quarantine before "
                             "activation."
                         )
                     else:
                         tool_message += (
-                            "\nPALADYN recorded recovery ticket "
+                            "\nDARKLINGER recorded recovery ticket "
                             f"{ticket_id} for {capability}. This capability requires "
                             "a trusted provider; offline generated code cannot claim "
                             "to repair it. Change provider or report the real blocker."
@@ -4796,7 +4796,7 @@ Current relationship stage: {stage}.
                         {
                             "role": "user",
                             "content": (
-                                "PALADYN rejected the generated source; no artifact "
+                                "DARKLINGER rejected the generated source; no artifact "
                                 "was activated. Produce a corrected replacement now. "
                                 "Return ONLY Python source defining synchronous "
                                 "def run(arguments). Consume every concrete fixture "
@@ -4811,13 +4811,13 @@ Current relationship stage: {stage}.
                         {
                             "role": "user",
                             "content": (
-                                "PALADYN lifecycle correction: you attempted to call "
+                                "DARKLINGER lifecycle correction: you attempted to call "
                                 f"the requested final tool `{tool_name}` before it was "
                                 "created. It is not executable. Do not repeat that "
                                 "name now. Your next response must invoke the available "
                                 f"`{lifecycle_builder}` function through native tool "
                                 "calling, with every required field from its supplied "
-                                "schema. Only after PALADYN returns an active artifact "
+                                "schema. Only after DARKLINGER returns an active artifact "
                                 "may you call the generated tool name."
                             ),
                         }
@@ -4907,7 +4907,7 @@ Current relationship stage: {stage}.
                             {
                                 "role": "user",
                                 "content": (
-                                    "PALADYN runtime handoff: the previous model "
+                                    "DARKLINGER runtime handoff: the previous model "
                                     "failed the active tool schema or validation "
                                     "twice. You inherit the same objective, exact "
                                     "validator error, verified ledger, and checkpoint. "
@@ -4935,7 +4935,7 @@ Current relationship stage: {stage}.
                         ),
                     )
                     final_answer = (
-                        "PALADYN stopped this recovery loop after the active "
+                        "DARKLINGER stopped this recovery loop after the active "
                         f"`{recoverable_failure_tool}` phase failed validation "
                         "three times and no unused qualified fallback model was "
                         "available. The checkpoint is preserved; no fake success "
@@ -5260,7 +5260,7 @@ Current relationship stage: {stage}.
             )
             page_title = re.search(
                 r"Page Title:\s*(.+?)(?=\s+-\s+Console:|\s+###\s+Snapshot|"
-                r"\s+\[PALADYN\s|$)",
+                r"\s+\[DARKLINGER\s|$)",
                 text,
                 flags=re.IGNORECASE,
             )
@@ -5863,7 +5863,7 @@ Current relationship stage: {stage}.
                 if (
                     len(observed_text) < 30
                     or key in seen_text
-                    or observed_text.startswith("[PALADYN ")
+                    or observed_text.startswith("[DARKLINGER ")
                 ):
                     continue
                 seen_text.add(key)
@@ -6217,7 +6217,7 @@ Current relationship stage: {stage}.
                 # tokens dropped that noun and left only the ambiguous verb.
                 primary = " ".join(primary_words[-18:])
         primary = re.sub(
-            r"^(?:(?:v|boss|paladyn)\s*[,!:—-]\s*)+",
+            r"^(?:(?:v|boss|darklinger)\s*[,!:—-]\s*)+",
             "",
             primary,
             flags=re.IGNORECASE,
@@ -6472,7 +6472,7 @@ Current relationship stage: {stage}.
     ) -> tuple[str, dict[str, Any]] | None:
         """Build a new grounded search when the model stops before public facts.
 
-        Completion fields belong to PALADYN's runtime contract, not to the local
+        Completion fields belong to DARKLINGER's runtime contract, not to the local
         model's judgment. If the model tries to finish without a requested
         address, contact, opening time, or location count, the runtime schedules
         a different focused DuckDuckGo query instead of accepting the empty
@@ -6563,7 +6563,7 @@ Current relationship stage: {stage}.
 
         for index, word in enumerate(words):
             folded = word.casefold()
-            if folded in {"paladyn"} or index == 0:
+            if folded in {"darklinger"} or index == 0:
                 continue
             has_digit = any(character.isdigit() for character in word)
             has_letter = any(character.isalpha() for character in word)
@@ -6608,12 +6608,12 @@ Current relationship stage: {stage}.
                 index > 0
                 and len(word) >= 8
                 and word[0].isupper()
-                and word.casefold() not in {"paladyn"}
+                and word.casefold() not in {"darklinger"}
             ):
                 return False
 
         addressed = re.match(
-            r"^\s*(?:(?:[^\s,!.?:—-]+)\s+){0,2}(?:v|boss|paladyn)\s*[,!.?:—-]",
+            r"^\s*(?:(?:[^\s,!.?:—-]+)\s+){0,2}(?:v|boss|darklinger)\s*[,!.?:—-]",
             clause,
             re.IGNORECASE,
         )
@@ -7333,7 +7333,7 @@ Current relationship stage: {stage}.
                 "=== CONVERSATION CONTINUITY ===",
                 (
                     "Prior user and assistant messages supplied with this request "
-                    "come from PALADYN's private dialogue ledger. Use user-authored "
+                    "come from DARKLINGER's private dialogue ledger. Use user-authored "
                     "details to resolve references to earlier people, subjects, and "
                     "tasks. Prior assistant replies may be mistaken and are never "
                     "proof that an action or tool call happened. Runtime checkpoints "
@@ -7353,7 +7353,7 @@ Current relationship stage: {stage}.
         if skill_context:
             sections.extend(
                 [
-                    "=== ACTIVE PALADYN SKILLS ===",
+                    "=== ACTIVE DARKLINGER SKILLS ===",
                     skill_context,
                 ]
             )
@@ -7407,7 +7407,7 @@ Current relationship stage: {stage}.
                     "response_language_preference_changed",
                     {
                         "scope": scope,
-                        "language": language or "PALADYN default",
+                        "language": language or "DARKLINGER default",
                         "changed": changed,
                         "source": "directly_told",
                     },
@@ -7556,7 +7556,7 @@ The visible answer MUST be written in English.
             learning_rule = (
                 "learning_create_snapshot_extractor is available because the task "
                 "requires a product-card extractor from observed accessibility text. "
-                "Call it with only the requested generated tool name. PALADYN binds "
+                "Call it with only the requested generated tool name. DARKLINGER binds "
                 "the latest real browser snapshot, writes the standalone Python, "
                 "derives an exact three-record regression test, quarantines it, runs "
                 "the test offline, and activates it. Do not provide source, fixtures, "
@@ -7573,12 +7573,12 @@ The visible answer MUST be written in English.
                 + (
                     "OWNER LAB is active: use any Python imports, file operations, "
                     "subprocesses, or dynamic-code facilities the task genuinely "
-                    "requires; PALADYN will contain and test them in the sandbox. "
+                    "requires; DARKLINGER will contain and test them in the sandbox. "
                     if owner_privileged_builder
                     else "The client restricted-source policy is active. "
                 )
                 +
-                "PALADYN derives input_schema and output_schema itself; never emit a "
+                "DARKLINGER derives input_schema and output_schema itself; never emit a "
                 "manifest or any JSON Schema. Source must define def run(arguments) and "
                 "return one JSON object exactly equal to test.expected. Never emit "
                 "JavaScript. The test must use a small literal excerpt of real "
@@ -7587,8 +7587,8 @@ The visible answer MUST be written in English.
                 "spelling exactly between test.arguments and source. One exact minimal "
                 "test is enough. If the owner supplied explicit JSON assignments for "
                 "the tool inputs, set test.arguments to an empty object and reference "
-                "those exact input names in source; PALADYN injects the immutable first "
-                "fixture itself. If the owner supplied expected = {...}, PALADYN also "
+                "those exact input names in source; DARKLINGER injects the immutable first "
+                "fixture itself. If the owner supplied expected = {...}, DARKLINGER also "
                 "injects that exact first object into test.expected. Otherwise, for "
                 "multiline records copy the complete first observed record block with "
                 "only the lines the parser needs, and use its "
@@ -7644,11 +7644,11 @@ Rules:
   preference, persona, policy, capability, target, or external effect, preserve it
   as a proposal for Boss instead of silently applying or discarding it.
 - Invoke exactly one tool per response; inspect its result before choosing the next.
-- Tool names are providers, not the completion contract. PALADYN records the
+- Tool names are providers, not the completion contract. DARKLINGER records the
   capability each successful provider supplied and may transparently fail over
   to an equivalent provider. Use the returned evidence; do not retry the failed
   provider by name.
-- When PALADYN opens a recovery ticket for a `generated.*` capability and the
+- When DARKLINGER opens a recovery ticket for a `generated.*` capability and the
   capability is still needed, use `learning_create_repair_adapter` when it is in
   CURRENT_EXECUTABLE_TOOLS. The runtime owns the captured fixture, quarantine,
   replay test, activation, provider health, and rollback. Never claim that an
@@ -7660,7 +7660,7 @@ Rules:
 - Exception for grounded structured data: when the owner prompt contains explicit
   JSON assignments matching the selected tool's input names, do not retype those
   potentially long values. An empty arguments object is valid in that case;
-  PALADYN binds the last occurrence of each matching input assignment. You still
+  DARKLINGER binds the last occurrence of each matching input assignment. You still
   provide every other required field required by the selected schema.
 - {learning_rule}
 - A failed tool result is evidence of failure, not evidence that the objective was
@@ -7676,7 +7676,7 @@ Rules:
   required tool call now or truthfully state that the work was not performed.
 - Describe work as completed only when tool results in this interaction provide
   concrete evidence. Opening a page alone is not extraction, analysis, or a report.
-- PALADYN currently has no telephony, messaging, remote-desktop, remote-shell,
+- DARKLINGER currently has no telephony, messaging, remote-desktop, remote-shell,
   network-exploitation, or system-compromise tool. Never claim a call, message,
   login, remote connection, exploit, or compromise. Browser activity does not
   constitute evidence for any of those actions.
@@ -7687,7 +7687,7 @@ Rules:
   work; never substitute the ordinary browser. The interactive inventory tool
   uses a visible private Firefox context with JavaScript disabled. If it reports
   a CAPTCHA, ask Boss to solve it manually and stop the turn. Never claim that
-  PALADYN solved or bypassed the CAPTCHA.
+  DARKLINGER solved or bypassed the CAPTCHA.
 - Use filesystem tools only for local files.
 - For public-web discovery, call `web_search` with a focused query, then copy an
   exact returned URL into `web_read`. These tools own search navigation and page
@@ -7872,7 +7872,7 @@ Rules:
             matched = True
         elif not explicitly_named:
             # Merely discussing, researching, or listing ordinary tools must not
-            # expose PALADYN's entire learning lifecycle. That overloaded small
+            # expose DARKLINGER's entire learning lifecycle. That overloaded small
             # models and caused unrelated browser tasks to emit empty learning
             # calls. Natural lifecycle requests get only the exact operation they
             # describe; explicit creation is handled by the contract above.
@@ -7943,7 +7943,7 @@ Rules:
         definitions: list[dict[str, Any]],
         successful_calls: list[dict[str, Any]],
     ) -> bool:
-        """Use raw-code generation only with PALADYN's source-only builder schema.
+        """Use raw-code generation only with DARKLINGER's source-only builder schema.
 
         Legacy integrations that still expose the expert manifest/test schema keep
         their old native function-call path. The current runtime advertises only
@@ -8004,7 +8004,7 @@ Rules:
                     + generated_contract.specification
                 )
         return """
-PALADYN is in generated-tool SOURCE PHASE.
+DARKLINGER is in generated-tool SOURCE PHASE.
 
 The runtime—not the language model—owns the tool name, description, manifest,
 fixture, schemas, tests, quarantine, validation, activation, and evidence report.
@@ -8015,17 +8015,17 @@ function-call envelope, Markdown commentary, a manifest, schemas, tests, or an
 explanation. The source must define a synchronous `def run(arguments)` and
 return one JSON object. The function implements ONLY the reusable operation.
 Never put test cases, activation logic, proof fields, the final requested
-invocation, or fixed example values inside `run`; PALADYN performs those stages
+invocation, or fixed example values inside `run`; DARKLINGER performs those stages
 after this source response. Read task inputs from `arguments` using the exact
 field names present in Boss's objective and compute the returned object from
 those inputs. Keep the implementation deterministic. Do not fabricate external
-facts; operate only on supplied arguments. PALADYN will bind exact immutable
+facts; operate only on supplied arguments. DARKLINGER will bind exact immutable
 fixtures, run the source offline twice when no owner oracle exists, and mutate
 those fixtures to prove the output actually depends on its input. A constant
 report, a list of future actions, or any result whose work is still `pending`
 will be rejected. If the task lacks the real bounded input needed to test the
 tool, do not fake completion—produce source that declares the required input so
-PALADYN can report the missing fixture. It will derive strict schemas, validate
+DARKLINGER can report the missing fixture. It will derive strict schemas, validate
 the artifact in quarantine. Candidate-derived expectations characterize only a
 prototype and never authorize activation. Activation additionally requires an
 independently specified expected-result contract, not a result inferred from
@@ -8056,7 +8056,7 @@ the candidate's own output.
             "learning_create_tool", SOURCE_DRAFT_TOOL,
         } and item.get("error")][-2:]
         for item in feedback:
-            messages.append({"role": "user", "content": "PALADYN rejected that source draft. Return complete valid Python, no envelope or prose. Fix the implementation, not the frozen tests:\n" + json.dumps({
+            messages.append({"role": "user", "content": "DARKLINGER rejected that source draft. Return complete valid Python, no envelope or prose. Fix the implementation, not the frozen tests:\n" + json.dumps({
                 "source": str(item.get("arguments", {}).get("source", ""))[:12000],
                 "error": str(item.get("error", item.get("result", "")))[:4000],
             }, ensure_ascii=False)})
@@ -9306,7 +9306,7 @@ the candidate's own output.
         The LLM still supplies the complete artifact payload, source, and test.
         It does not get to replace the active builder's function name with the
         name of a future tool merely because that target appears in the user
-        request. This keeps phase control in PALADYN rather than model prose.
+        request. This keeps phase control in DARKLINGER rather than model prose.
         """
 
         available = {
@@ -9442,7 +9442,7 @@ the candidate's own output.
         """Require a nearby call cue before fuzzy-matching a spoken tool name.
 
         Natural task descriptions can contain phrases such as ``browser
-        snapshot text`` without asking PALADYN to invoke the built-in
+        snapshot text`` without asking DARKLINGER to invoke the built-in
         ``browser_snapshot`` function specifically. Voice transcription repair
         therefore applies only after a local call phrase (``use tool``, ``użyj
         narzędzia`` and close equivalents), while an exact underscored
@@ -10156,7 +10156,7 @@ the candidate's own output.
 
     @staticmethod
     def _is_continuation_request(prompt: str) -> bool:
-        """Recognize only PALADYN's language-neutral continuation protocol.
+        """Recognize only DARKLINGER's language-neutral continuation protocol.
 
         Natural-language meaning belongs to ``MultilingualIntentRouter``. Keeping
         translated verb lists here caused ordinary sentences containing words
@@ -10322,7 +10322,7 @@ the candidate's own output.
         if len(result) <= max_characters:
             return result
         marker = (
-            "\n\n[PALADYN omitted the middle of this tool output from the model "
+            "\n\n[DARKLINGER omitted the middle of this tool output from the model "
             "context; the full result remains in the runtime checkpoint.]\n\n"
         )
         body = max(0, max_characters - len(marker))
@@ -10404,7 +10404,7 @@ the candidate's own output.
                 if blocks:
                     compact = "\n".join(header)
                     compact += (
-                        "\n\n[PALADYN prioritized repeated observed page-item "
+                        "\n\n[DARKLINGER prioritized repeated observed page-item "
                         "blocks; the full snapshot remains in the runtime "
                         "checkpoint.]"
                     )
@@ -10529,7 +10529,7 @@ the candidate's own output.
                 if excerpts:
                     compact = "\n".join(header)
                     compact += (
-                        "\n\n[PALADYN prioritized topic-relevant detail-page "
+                        "\n\n[DARKLINGER prioritized topic-relevant detail-page "
                         "evidence; the full snapshot remains in the runtime "
                         "checkpoint.]"
                     )
@@ -10599,7 +10599,7 @@ the candidate's own output.
 
         compact = "\n".join(header)
         compact += (
-            "\n\n[PALADYN prioritized observed DuckDuckGo search-result blocks; "
+            "\n\n[DARKLINGER prioritized observed DuckDuckGo search-result blocks; "
             "the full accessibility snapshot remains in the runtime checkpoint.]"
         )
         compact += "\n\n" + "\n\n".join(selected_blocks)
@@ -10786,7 +10786,7 @@ the candidate's own output.
         subject = ", ".join(described) if described else "the requested work"
         return (
             f"No—{subject} did not happen. The model made the claim without "
-            "matching successful tool evidence, so PALADYN killed it. Nothing is "
+            "matching successful tool evidence, so DARKLINGER killed it. Nothing is "
             "running in the background."
         )
 
@@ -10897,7 +10897,7 @@ the candidate's own output.
         if missing and all(item.startswith("answer:") for item in missing):
             return (
                 "The tool ran, but the model failed to turn its output into a grounded "
-                "answer. PALADYN killed the empty completion instead of dressing it up "
+                "answer. DARKLINGER killed the empty completion instead of dressing it up "
                 "as success. Nothing is running in the background."
             )
         if missing and all(item.startswith("browser_") for item in missing):
@@ -10907,7 +10907,7 @@ the candidate's own output.
                 "extracted, and I'm not making shit up to fill the hole."
             )
         return (
-            "The task didn't finish because PALADYN obtained no verified evidence "
+            "The task didn't finish because DARKLINGER obtained no verified evidence "
             f"for: {', '.join(missing)}. Nothing is running in the background, "
             "and I'm not inventing a result."
         )
@@ -10987,7 +10987,7 @@ the candidate's own output.
         )
         task = asyncio.create_task(
             processing,
-            name="paladyn-memory",
+            name="darklinger-memory",
         )
         tasks = getattr(self, "_memory_tasks", None)
         if tasks is None:
@@ -11448,7 +11448,7 @@ swear mechanically. Output only the rewritten answer.
                 and generated_contract.archetype == "client_har_summary"
             ):
                 report += (
-                    "\n- Scope: the generated result above came from PALADYN's "
+                    "\n- Scope: the generated result above came from DARKLINGER's "
                     "synthetic HAR fixture. The browser visit separately verified "
                     "that the selected page was reachable. This client-side analyzer "
                     "does not measure server-side visitors."
@@ -11610,7 +11610,7 @@ swear mechanically. Output only the rewritten answer.
     def _memory_match_tokens(value: object) -> set[str]:
         stopwords = {
             "about", "after", "again", "always", "because", "boss", "could",
-            "current", "future", "information", "lesson", "model", "paladyn",
+            "current", "future", "information", "lesson", "model", "darklinger",
             "should", "specific", "task", "that", "their", "there", "these",
             "this", "tool", "tools", "using", "when", "where", "which", "with",
         }

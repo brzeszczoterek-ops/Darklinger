@@ -73,7 +73,7 @@ class SpeechRuntime:
         return self._ptt_process is not None
 
     async def listen(self) -> str:
-        with tempfile.TemporaryDirectory(prefix="paladyn-stt-") as directory:
+        with tempfile.TemporaryDirectory(prefix="darklinger-stt-") as directory:
             recording = Path(directory) / "utterance.wav"
             await self._record_until_silence(recording)
             return await self._transcribe(recording)
@@ -81,7 +81,7 @@ class SpeechRuntime:
     async def start_push_to_talk(self) -> None:
         if self.push_to_talk_recording:
             raise SpeechRuntimeError("Push-to-talk recording is already active")
-        directory = tempfile.TemporaryDirectory(prefix="paladyn-ptt-")
+        directory = tempfile.TemporaryDirectory(prefix="darklinger-ptt-")
         recording = Path(directory.name) / "utterance.wav"
         try:
             process = await asyncio.create_subprocess_exec(
@@ -207,7 +207,7 @@ class SpeechRuntime:
         model_config: Path,
         effects: tuple[str, ...],
     ) -> None:
-        with tempfile.TemporaryDirectory(prefix="paladyn-tts-") as directory:
+        with tempfile.TemporaryDirectory(prefix="darklinger-tts-") as directory:
             clean = Path(directory) / "clean.wav"
             rendered = Path(directory) / "rendered.wav"
 
@@ -250,7 +250,7 @@ class SpeechRuntime:
 
             self._kokoro_request += 1
             request_id = f"speech-{self._kokoro_request}"
-            with tempfile.TemporaryDirectory(prefix="paladyn-kokoro-") as directory:
+            with tempfile.TemporaryDirectory(prefix="darklinger-kokoro-") as directory:
                 request = {
                     "command": "synthesize",
                     "id": request_id,

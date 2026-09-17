@@ -25,7 +25,7 @@ def test_public_edition_has_no_private_extension() -> None:
 def test_public_edition_fails_closed_on_owner_profiles() -> None:
     extension = load_edition_extension(resolve_edition("public"))
 
-    with pytest.raises(EditionUnavailable, match="PALADYN-Full"):
+    with pytest.raises(EditionUnavailable, match="DARKLINGER-Full"):
         extension.configure_authorization(
             AuthorizationEnvelope(),
             evm_profile="owner_lab",
@@ -38,8 +38,8 @@ def test_public_config_rejects_owner_lab_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("PALADYN_EDITION", "public")
-    monkeypatch.setenv("PALADYN_EVM_PROFILE", "owner_lab")
+    monkeypatch.setenv("DARKLINGER_EDITION", "public")
+    monkeypatch.setenv("DARKLINGER_EVM_PROFILE", "owner_lab")
 
-    with pytest.raises(ValueError, match="require PALADYN-Full"):
+    with pytest.raises(ValueError, match="require DARKLINGER-Full"):
         load_config()

@@ -219,7 +219,7 @@ def choose_startup_action(
             continue
         current_pool_cards += 1
 
-    output("\nPALADYN startup:")
+    output("\nDARKLINGER startup:")
     output("  1. Start V")
     output(
         "  2. Qualify or requalify a local model "
@@ -435,10 +435,10 @@ def configure_manual_hierarchy_interactively(
     output: Output,
     allow_manual_hierarchy: bool,
 ) -> bool:
-    """Set a hard owner-defined fallback order for PALADYN-Full."""
+    """Set a hard owner-defined fallback order for DARKLINGER-Full."""
 
     if not allow_manual_hierarchy:
-        output("Manual model hierarchy requires PALADYN-Full.")
+        output("Manual model hierarchy requires DARKLINGER-Full.")
         return False
     by_path = {str(model.path): model for model in models}
     ordered: list[LocalModel] = []
@@ -462,7 +462,7 @@ def configure_manual_hierarchy_interactively(
         output("Configure the qualified routing pool with option 3 first.")
         return False
 
-    output("\nPALADYN-Full manual model hierarchy:")
+    output("\nDARKLINGER-Full manual model hierarchy:")
     for index, model in enumerate(ordered, start=1):
         output(f"  {index}. {model.path.name}")
     output("  0. Return to automatic capability scoring")
@@ -493,7 +493,7 @@ def configure_manual_hierarchy_interactively(
         state.routing_enabled = True
         state.routing_strategy = "manual_hierarchy"
         store.save(state)
-        output("PALADYN-Full manual model hierarchy enabled.")
+        output("DARKLINGER-Full manual model hierarchy enabled.")
         return True
 
 

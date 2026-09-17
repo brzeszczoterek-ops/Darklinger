@@ -168,7 +168,7 @@ spoken test fixtures.
 
 ## Natural-language test contracts
 
-PALADYN now separates semantic fixture extraction from source generation. When
+DARKLINGER now separates semantic fixture extraction from source generation. When
 Boss supplies explicit input/output examples and a separate final invocation in
 ordinary language, a semantic pass normalizes them into a runtime-owned
 contract. The parser is not tied to Polish or English keywords. It accepts only
@@ -178,7 +178,7 @@ stops for clarification when the contract is absent or ambiguous.
 
 The frozen contract is not shown to the source model as editable test data. The
 source model receives the required input/output field names and read-only
-examples. PALADYN
+examples. DARKLINGER
 runs every frozen example independently in Bubblewrap and activation requires
 all comparisons to pass. Only afterward does the runtime invoke the active tool
 with the separately frozen final arguments. Candidate output can never become a
@@ -194,21 +194,21 @@ The 2026-09-09 live AgenticQwen regression used only natural Polish wording:
 `dla 2 ma dać 4`, `dla 7 ma dać 14`, followed by the separate invocation
 `n = 9`. The extractor grounded both examples, safely canonicalized the sole
 input alias (`liczba` versus `n`), and froze two tests. Bubblewrap reported two
-passed comparisons, PALADYN activated `podwoj_liczbe`, and the runtime-bound
+passed comparisons, DARKLINGER activated `podwoj_liczbe`, and the runtime-bound
 final call returned `{"wynik": 18}`. One malformed source draft was rejected
 before the successful draft; no test oracle was taken from candidate output.
 
 ## Explicit contracts and a reusable local example
 
 Expert callers may include one bounded `tool_contract=<JSON>` object in the
-owner objective. PALADYN freezes its one-to-eight input/output cases directly,
+owner objective. DARKLINGER freezes its one-to-eight input/output cases directly,
 without spending a model turn to reinterpret escaped data. The contract is
 immutable, requires consistent field names and a separately supplied final
 input, and rejects conflicting or non-finite values. Embedded example URLs are
 treated as data, so they cannot accidentally route an offline task to browser
 navigation.
 
-For online creation, the owner need not predict dynamic numeric results. PALADYN
+For online creation, the owner need not predict dynamic numeric results. DARKLINGER
 still requires an observation boundary (a safe URL and the meaning of “traffic”)
 because page loads, HTTP requests, and server-side visitor counts are different
 measurements. If that boundary is absent, it pauses once for that information
@@ -228,7 +228,7 @@ On 2026-09-16 the current parser was also checked by replaying the actual draft
 that previously failed with a leading `e`. Three fixed sandbox cases passed;
 the separate final case returned 2 requests, 1 error and 10.0 ms, and the unseen
 case returned the holdout result above both before and after runtime reload.
-Artifacts: `/tmp/paladyn-har-parser-replay-vikj75f8`. This is a replay of captured
+Artifacts: `/tmp/darklinger-har-parser-replay-vikj75f8`. This is a replay of captured
 model output, distinct from a fresh model generation. The final automated suites
 passed 1012 Full and 943 freshly exported Public tests.
 
@@ -237,10 +237,10 @@ The fresh local AgenticQwen run on 2026-09-16 also passed. Its trace
 (`finish_reason: length`), a successful `learning_create_tool`, and a successful
 `har_summary` invocation before completion. All three fixed cases passed in
 Bubblewrap; the independent holdout and fresh-runtime reload matched their
-expected results. Evidence is under `/tmp/paladyn-har-trial-8dn8ncti`, including
+expected results. Evidence is under `/tmp/darklinger-har-trial-8dn8ncti`, including
 `report.json` and the checkpoint/journal. The run lasted 603 seconds, from
 02:42:50 to 02:52:54 UTC. This server was manually launched with default reasoning
-and four slots, unlike PALADYN's default reasoning-off/single-slot profile. It
+and four slots, unlike DARKLINGER's default reasoning-off/single-slot profile. It
 must not be used as the application-profile speed baseline. This
 trial exercises explicit synthetic HAR inputs and expectations, not live website
 traffic capture, general natural-language contract discovery, or every tool.
@@ -264,7 +264,7 @@ Measurements do not record reasoning text or issue extra generations. The trial
 still requires actual creation/execution receipts, all three frozen examples,
 the separate final result, an unseen holdout and successful runtime reload.
 
-The measured server used AgenticQwen-8B.Q8_0, PALADYN's `build_server_command`
+The measured server used AgenticQwen-8B.Q8_0, DARKLINGER's `build_server_command`
 with one slot, reasoning off, balanced repetition penalties, Q8 KV cache, 99 GPU
 layers and context 16000 (server-rounded to 16128). Temperature was 0 and the
 source cap remained 1536. The model was already loaded for each measured task;
@@ -278,10 +278,10 @@ startup time is excluded. No network tool or remote model was involved.
 | After, warm prefix | 893 | 290 | 544 | 1.33 s | 46.88 s | 49.57 s |
 
 All these trials passed, without repair attempts. Evidence directories are
-`/tmp/paladyn-har-trial-uz6ucim7` (before),
-`/tmp/paladyn-har-trial-i28ng9m5` (after, cold), and
-`/tmp/paladyn-har-trial-_gt7fm4t` (after, warm); each contains `report.json` and
-execution traces. The repeated baseline is `/tmp/paladyn-har-trial-3841uytv`:
+`/tmp/darklinger-har-trial-uz6ucim7` (before),
+`/tmp/darklinger-har-trial-i28ng9m5` (after, cold), and
+`/tmp/darklinger-har-trial-_gt7fm4t` (after, warm); each contains `report.json` and
+execution traces. The repeated baseline is `/tmp/darklinger-har-trial-3841uytv`:
 only `_generated_source_messages` was restored in the test process from commit
 `da98778`; the working tree, server settings and trial checks were unchanged.
 These temporary files are local evidence, not release assets.

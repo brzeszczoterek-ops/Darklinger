@@ -1,3 +1,3 @@
-PALADYN local read-only probe.
+DARKLINGER local read-only probe.
 Inventory: 17 amber units and 9 cobalt units.
 Verification marker: LOCAL-READ-42.

@@ -598,7 +598,7 @@ def test_runtime_review_uses_previous_task_and_rejects_path_traversal(
     report = review_task(root, exclude_task_id=current.task_id)
 
     assert report["task_id"] == prior.task_id
-    with pytest.raises(ValueError, match="invalid PALADYN"):
+    with pytest.raises(ValueError, match="invalid DARKLINGER"):
         review_task(root, task_id="../../secrets")
 
 
@@ -2726,7 +2726,7 @@ async def test_router_keeps_read_only_current_project_review_without_path() -> N
 
     router = MultilingualIntentRouter(LLMStub())
     intent = await router.classify(
-        "Przejrzyj kod PALADYNA i przedstaw plan zmian przed edycją."
+        "Przejrzyj kod DARKLINGERA i przedstaw plan zmian przed edycją."
     )
 
     assert intent is not None
@@ -2738,7 +2738,7 @@ async def test_router_keeps_read_only_current_project_review_without_path() -> N
 
 def test_project_code_review_builds_deterministic_read_contract() -> None:
     contract = TaskContract.from_prompt(
-        "Przejrzyj kod PALADYNA i przedstaw dokładnie proponowane zmiany. "
+        "Przejrzyj kod DARKLINGERA i przedstaw dokładnie proponowane zmiany. "
         "Nie modyfikuj plików przed zatwierdzeniem."
     )
 
@@ -3206,7 +3206,7 @@ def test_multiple_test_paths_do_not_request_command_execution() -> None:
 
 def test_passive_smoke_test_text_does_not_require_command_execution() -> None:
     contract = TaskContract.from_prompt(
-        "Utwórz plik smoke-report.md z nagłówkiem '# PALADYN smoke test', "
+        "Utwórz plik smoke-report.md z nagłówkiem '# DARKLINGER smoke test', "
         "a potem go odczytaj."
     )
 
@@ -3863,10 +3863,10 @@ def test_autonomy_root_can_be_configured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("PALADYN_AUTONOMY_ROOT", "state/tasks")
-    monkeypatch.setenv("PALADYN_MODEL_RUNTIME_ROOT", "state/models")
-    monkeypatch.setenv("PALADYN_VOICE_ROOT", "state/voice")
-    monkeypatch.setenv("PALADYN_MODEL_LOADER", "required")
+    monkeypatch.setenv("DARKLINGER_AUTONOMY_ROOT", "state/tasks")
+    monkeypatch.setenv("DARKLINGER_MODEL_RUNTIME_ROOT", "state/models")
+    monkeypatch.setenv("DARKLINGER_VOICE_ROOT", "state/voice")
+    monkeypatch.setenv("DARKLINGER_MODEL_LOADER", "required")
     monkeypatch.setenv("V_CORE_MCP_FILESYSTEM", "workspace")
 
     config = load_config()

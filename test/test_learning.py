@@ -80,7 +80,7 @@ OUTPUT_SCHEMA = {
     "additionalProperties": False,
 }
 FULL_EDITION_AVAILABLE = (
-    os.getenv("PALADYN_EDITION", "auto").casefold() != "public"
+    os.getenv("DARKLINGER_EDITION", "auto").casefold() != "public"
     and find_spec("v_full") is not None
 )
 DOUBLE_SOURCE = """
@@ -337,7 +337,7 @@ def test_filesystem_arguments_are_owned_by_runtime_workspace(tmp_path: Path) -> 
     )
     second_guess = tools.normalize_arguments(
         "create_directory",
-        {"path": "/home/Vi/Desktop/PALADYN-Workspace/cebula_info"},
+        {"path": "/home/Vi/Desktop/DARKLINGER-Workspace/cebula_info"},
     )
     relative_report = tools.normalize_arguments(
         "write_file",
@@ -363,7 +363,7 @@ def test_read_only_project_review_uses_project_root_without_exposing_writes(
     tools.workspace = (tmp_path / "workspace").resolve()
     tools.project_read_root = (tmp_path / "project").resolve()
     tools.interaction_prompt = (
-        "Przejrzyj kod PALADYNA i przedstaw raport. Nie modyfikuj plikow."
+        "Przejrzyj kod DARKLINGERA i przedstaw raport. Nie modyfikuj plikow."
     )
 
     listing = tools.normalize_arguments("list_directory", {})
@@ -751,7 +751,7 @@ async def test_mcp_user_correction_preserves_raw_user_message(tmp_path: Path) ->
 
 @pytest.mark.skipif(
     not FULL_EDITION_AVAILABLE,
-    reason="private PALADYN-Full extension is not installed",
+    reason="private DARKLINGER-Full extension is not installed",
 )
 def test_learning_profiles_keep_persistent_promotion_owner_only(tmp_path: Path) -> None:
     def configured(profile: str, suffix: str) -> MCPTools:
@@ -782,7 +782,7 @@ def test_learning_profiles_keep_persistent_promotion_owner_only(tmp_path: Path) 
 @pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap required")
 @pytest.mark.skipif(
     not FULL_EDITION_AVAILABLE,
-    reason="private PALADYN-Full extension is not installed",
+    reason="private DARKLINGER-Full extension is not installed",
 )
 @pytest.mark.asyncio
 async def test_owner_profile_allows_privileged_code_inside_sandbox(
@@ -857,7 +857,7 @@ def run(arguments):
 @pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap required")
 @pytest.mark.skipif(
     not FULL_EDITION_AVAILABLE,
-    reason="private PALADYN-Full extension is not installed",
+    reason="private DARKLINGER-Full extension is not installed",
 )
 @pytest.mark.asyncio
 async def test_blueprint_normalizes_invalid_optional_version(tmp_path: Path) -> None:
@@ -2229,6 +2229,6 @@ async def test_matching_active_skill_reaches_real_agent_system_prompt(
     matched = agent._build_system_prompt("Please double this value", agent_mode=True)
     unrelated = agent._build_system_prompt("Summarize the file", agent_mode=True)
 
-    assert "=== ACTIVE PALADYN SKILLS ===" in matched
+    assert "=== ACTIVE DARKLINGER SKILLS ===" in matched
     assert '"name": "double_numbers"' in matched
-    assert "=== ACTIVE PALADYN SKILLS ===" not in unrelated
+    assert "=== ACTIVE DARKLINGER SKILLS ===" not in unrelated

@@ -1,7 +1,7 @@
 "use strict";
 
-const sessionToken = document.querySelector('meta[name="paladyn-session"]').content;
-const headers = {"X-PALADYN-Session": sessionToken};
+const sessionToken = document.querySelector('meta[name="darklinger-session"]').content;
+const headers = {"X-DARKLINGER-Session": sessionToken};
 const jsonHeaders = {...headers, "Content-Type": "application/json"};
 
 const byId = (id) => document.getElementById(id);

@@ -40,7 +40,7 @@ implementations, or certify generated tools. They do not repair tools.
 
 After semantic classification fails, an action verb alone must not authorize a
 model-generated completion report. If the resulting contract has no execution
-route after inheritance and owner constraints, PALADYN returns a clarification
+route after inheritance and owner constraints, DARKLINGER returns a clarification
 and explicitly states that no tools, repairs, or tests ran.
 
 Regression coverage includes the previously observed Polish voice transcript
@@ -123,7 +123,7 @@ not swallowed. Offline browser fixtures do not count as live network evidence.
 
 The same evidence boundary now applies to automatic functional self-tests:
 `web_search` may establish a candidate URL, while `web_read` must use that
-recorded candidate and retrieve page content before PALADYN can present it as
+recorded candidate and retrieve page content before DARKLINGER can present it as
 observed. Passing the deterministic fixtures proves only this parser and
 grounding path. Current reachability still requires the separate opt-in live
 probe.

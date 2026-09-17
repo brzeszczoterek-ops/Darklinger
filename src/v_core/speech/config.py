@@ -8,6 +8,8 @@ import re
 import shutil
 from typing import Any
 
+from ..branding import env_value
+
 
 class SpeechConfigurationError(RuntimeError):
     """Raised when the local speech stack is missing or malformed."""
@@ -36,7 +38,7 @@ def _resolve_executable_under(root: Path, value: str) -> Path:
 
 
 def _float_env(name: str, default: float) -> float:
-    value = os.getenv(name)
+    value = env_value(name)
     if value is None:
         return default
     try:
@@ -46,7 +48,7 @@ def _float_env(name: str, default: float) -> float:
 
 
 def _int_env(name: str, default: int) -> int:
-    value = os.getenv(name)
+    value = env_value(name)
     if value is None:
         return default
     try:
@@ -216,45 +218,45 @@ class SpeechConfig:
     def load(cls, root: Path) -> SpeechConfig:
         root = root.expanduser().resolve()
         voice = VoiceSelection.load(root)
-        input_target = os.getenv("PALADYN_AUDIO_INPUT_TARGET", "").strip() or None
-        output_target = os.getenv("PALADYN_AUDIO_OUTPUT_TARGET", "").strip() or None
+        input_target = env_value("DARKLINGER_AUDIO_INPUT_TARGET", "").strip() or None
+        output_target = env_value("DARKLINGER_AUDIO_OUTPUT_TARGET", "").strip() or None
 
         config = cls(
             root=root,
-            recorder=_resolve_command(os.getenv("PALADYN_RECORDER", "pw-record")),
-            player=_resolve_command(os.getenv("PALADYN_PLAYER", "pw-play")),
+            recorder=_resolve_command(env_value("DARKLINGER_RECORDER", "pw-record")),
+            player=_resolve_command(env_value("DARKLINGER_PLAYER", "pw-play")),
             whisper_cli=_resolve_command(
-                os.getenv("PALADYN_WHISPER_CLI", "whisper-cli")
+                env_value("DARKLINGER_WHISPER_CLI", "whisper-cli")
             ),
             whisper_model=_resolve_under(
                 root,
-                os.getenv("PALADYN_WHISPER_MODEL", "models/ggml-base.bin"),
+                env_value("DARKLINGER_WHISPER_MODEL", "models/ggml-base.bin"),
             ),
-            piper=_resolve_command(os.getenv("PALADYN_PIPER", "piper")),
-            sox=_resolve_command(os.getenv("PALADYN_SOX", "sox")),
+            piper=_resolve_command(env_value("DARKLINGER_PIPER", "piper")),
+            sox=_resolve_command(env_value("DARKLINGER_SOX", "sox")),
             voice=voice,
             input_target=input_target,
             output_target=output_target,
-            speech_threshold=_float_env("PALADYN_SPEECH_THRESHOLD", 0.01),
+            speech_threshold=_float_env("DARKLINGER_SPEECH_THRESHOLD", 0.01),
             minimum_speech_seconds=_float_env(
-                "PALADYN_MINIMUM_SPEECH_SECONDS", 0.20
+                "DARKLINGER_MINIMUM_SPEECH_SECONDS", 0.20
             ),
-            end_silence_seconds=_float_env("PALADYN_END_SILENCE_SECONDS", 1.20),
-            start_timeout_seconds=_float_env("PALADYN_SPEECH_START_TIMEOUT", 12.0),
-            maximum_record_seconds=_float_env("PALADYN_MAXIMUM_RECORD_SECONDS", 60.0),
+            end_silence_seconds=_float_env("DARKLINGER_END_SILENCE_SECONDS", 1.20),
+            start_timeout_seconds=_float_env("DARKLINGER_SPEECH_START_TIMEOUT", 12.0),
+            maximum_record_seconds=_float_env("DARKLINGER_MAXIMUM_RECORD_SECONDS", 60.0),
             whisper_language=(
-                os.getenv("PALADYN_WHISPER_LANGUAGE", "auto").strip().casefold()
+                env_value("DARKLINGER_WHISPER_LANGUAGE", "auto").strip().casefold()
                 or "auto"
             ),
-            whisper_threads=_int_env("PALADYN_WHISPER_THREADS", 4),
-            whisper_initial_prompt=os.getenv(
-                "PALADYN_WHISPER_INITIAL_PROMPT", ""
+            whisper_threads=_int_env("DARKLINGER_WHISPER_THREADS", 4),
+            whisper_initial_prompt=env_value(
+                "DARKLINGER_WHISPER_INITIAL_PROMPT", ""
             ).strip(),
             whisper_fallback_cli=_optional_command(
-                os.getenv("PALADYN_WHISPER_FALLBACK_CLI", "")
+                env_value("DARKLINGER_WHISPER_FALLBACK_CLI", "")
             ),
             whisper_fallback_model=_optional_under(
-                root, os.getenv("PALADYN_WHISPER_FALLBACK_MODEL", "")
+                root, env_value("DARKLINGER_WHISPER_FALLBACK_MODEL", "")
             ),
         )
         config.validate()
@@ -306,11 +308,11 @@ class SpeechConfig:
             )
 
         numeric = {
-            "PALADYN_SPEECH_THRESHOLD": self.speech_threshold,
-            "PALADYN_MINIMUM_SPEECH_SECONDS": self.minimum_speech_seconds,
-            "PALADYN_END_SILENCE_SECONDS": self.end_silence_seconds,
-            "PALADYN_SPEECH_START_TIMEOUT": self.start_timeout_seconds,
-            "PALADYN_MAXIMUM_RECORD_SECONDS": self.maximum_record_seconds,
+            "DARKLINGER_SPEECH_THRESHOLD": self.speech_threshold,
+            "DARKLINGER_MINIMUM_SPEECH_SECONDS": self.minimum_speech_seconds,
+            "DARKLINGER_END_SILENCE_SECONDS": self.end_silence_seconds,
+            "DARKLINGER_SPEECH_START_TIMEOUT": self.start_timeout_seconds,
+            "DARKLINGER_MAXIMUM_RECORD_SECONDS": self.maximum_record_seconds,
         }
         invalid = [name for name, value in numeric.items() if value <= 0]
         if invalid:
@@ -319,19 +321,19 @@ class SpeechConfig:
             )
         if self.maximum_record_seconds <= self.minimum_speech_seconds:
             raise SpeechConfigurationError(
-                "PALADYN_MAXIMUM_RECORD_SECONDS must exceed minimum speech duration"
+                "DARKLINGER_MAXIMUM_RECORD_SECONDS must exceed minimum speech duration"
             )
         if not 1 <= self.whisper_threads <= 32:
             raise SpeechConfigurationError(
-                "PALADYN_WHISPER_THREADS must be between 1 and 32"
+                "DARKLINGER_WHISPER_THREADS must be between 1 and 32"
             )
         if not re.fullmatch(r"auto|[a-z]{2}(?:-[a-z]{2})?", self.whisper_language):
             raise SpeechConfigurationError(
-                "PALADYN_WHISPER_LANGUAGE must be auto or a language code"
+                "DARKLINGER_WHISPER_LANGUAGE must be auto or a language code"
             )
         if len(self.whisper_initial_prompt) > 1_000:
             raise SpeechConfigurationError(
-                "PALADYN_WHISPER_INITIAL_PROMPT must not exceed 1000 characters"
+                "DARKLINGER_WHISPER_INITIAL_PROMPT must not exceed 1000 characters"
             )
 
 

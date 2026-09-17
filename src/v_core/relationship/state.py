@@ -72,7 +72,7 @@ class RelationshipState:
         default_factory=list
     )
 
-    # Empty means PALADYN's configured default (currently English). This is
+    # Empty means DARKLINGER's configured default (currently English). This is
     # runtime-owned state: the relationship model never writes it.
     preferred_response_language: str = ""
 

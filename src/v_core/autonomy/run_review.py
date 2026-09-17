@@ -54,12 +54,12 @@ def load_task_checkpoint(
     task_id: str = "",
     exclude_task_id: str = "",
 ) -> dict[str, Any] | None:
-    """Load one PALADYN-owned checkpoint without accepting arbitrary paths."""
+    """Load one DARKLINGER-owned checkpoint without accepting arbitrary paths."""
 
     candidates = _checkpoint_paths(root)
     if task_id:
         if not _TASK_ID.fullmatch(task_id):
-            raise ValueError("invalid PALADYN interactive task ID")
+            raise ValueError("invalid DARKLINGER interactive task ID")
         candidates = [
             Path(root) / "checkpoints" / f"{task_id}.json"
         ]
@@ -83,7 +83,7 @@ def review_task_checkpoint(payload: dict[str, Any]) -> dict[str, Any]:
     """Create a bounded, deterministic post-mortem from runtime evidence.
 
     The model may explain this report, but it cannot add findings here. Every
-    finding is derived from checkpoint fields written by PALADYN itself.
+    finding is derived from checkpoint fields written by DARKLINGER itself.
     """
 
     raw_calls = payload.get("tool_calls", [])
@@ -130,7 +130,7 @@ def review_task_checkpoint(payload: dict[str, Any]) -> dict[str, Any]:
         add(
             "interrupted_checkpoint",
             "high",
-            "The task ended because its PALADYN runtime exited before normal completion.",
+            "The task ended because its DARKLINGER runtime exited before normal completion.",
             evidence=(
                 f"status={status}; finished_at={payload.get('finished_at')!r}"
             ),
@@ -163,7 +163,7 @@ def review_task_checkpoint(payload: dict[str, Any]) -> dict[str, Any]:
         add(
             "snapshot_after_failed_navigation",
             "high",
-            "PALADYN requested a page snapshot after the latest navigation had failed, so it could only observe the error page.",
+            "DARKLINGER requested a page snapshot after the latest navigation had failed, so it could only observe the error page.",
             tool_calls=snapshots_after_failure,
         )
 
@@ -329,7 +329,7 @@ def review_task(
     if payload is None:
         return {
             "schema_version": 1,
-            "error": "No matching PALADYN interactive task checkpoint was found.",
+            "error": "No matching DARKLINGER interactive task checkpoint was found.",
             "findings": [],
         }
     return review_task_checkpoint(payload)

@@ -119,7 +119,7 @@ async def test_local_tools(tools, definitions, trace=None, *, timeout=10, prompt
         # Each tool gets separate disposable data: edits/moves cannot pollute
         # later checks. This is fixture isolation, not an OS sandbox.
         try:
-            temporary = TemporaryDirectory(prefix=".paladyn-selftest-", dir=root)
+            temporary = TemporaryDirectory(prefix=".darklinger-selftest-", dir=root)
         except OSError as error:
             results.append({"tool": name, "status": "not_tested",
                             "reason": "Temporary fixture directory unavailable: " + type(error).__name__})
@@ -145,7 +145,7 @@ class _Fixture:
 
 
 def _prepare_fixture(name, directory):
-    marker = "paladyn-fixture-" + uuid4().hex + "-zażółć"
+    marker = "darklinger-fixture-" + uuid4().hex + "-zażółć"
     source = directory / ("input-" + uuid4().hex + ".txt")
     source.write_text(marker, encoding="utf-8")
     target = directory / "output.txt"

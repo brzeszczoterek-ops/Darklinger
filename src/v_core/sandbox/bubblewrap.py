@@ -74,7 +74,7 @@ class BubblewrapBackend:
     The guest gets a minimal read-only operating-system view, a private PID and
     network namespace, an ephemeral /tmp, and one writable task workspace. It
     never inherits the host environment, home directory, wallet files, SSH
-    agent, Docker socket, or PALADYN memory.
+    agent, Docker socket, or DARKLINGER memory.
     """
 
     name = "bubblewrap"
@@ -317,7 +317,7 @@ class BubblewrapBackend:
         # how many processes the desktop user already owns; a busy workstation
         # can therefore prevent bwrap from creating its private namespaces at
         # all. Apply the process limit only after bwrap has entered the isolated
-        # user/PID namespaces so it constrains the guest workload, not PALADYN's
+        # user/PID namespaces so it constrains the guest workload, not DARKLINGER's
         # host session.
         argv.extend(
             (
@@ -377,7 +377,7 @@ class BubblewrapBackend:
                         f"libseccomp could not block syscall {name}: errno {-result}"
                     )
             fd = os.memfd_create(
-                "paladyn-network-seccomp",
+                "darklinger-network-seccomp",
                 flags=getattr(os, "MFD_CLOEXEC", 0),
             )
             result = library.seccomp_export_bpf(context, fd)

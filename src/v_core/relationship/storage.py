@@ -85,7 +85,7 @@ class RelationshipStorage:
         if not isinstance(payload, dict):
             raise RelationshipStorageError("Relationship state must be a mapping")
 
-        # Version 1 uses a wrapper. Flat files from PALADYN 1.0 are migrated
+        # Version 1 uses a wrapper. Flat files from DARKLINGER 1.0 are migrated
         # transparently on the next successful save.
         if "schema_version" in payload:
             if payload.get("schema_version") != 1:

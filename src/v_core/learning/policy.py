@@ -158,7 +158,7 @@ class ArtifactPolicy:
             )
         if (
             manifest.name in _RESERVED_TOOL_NAMES
-            or manifest.name.startswith(("evm_", "learning_", "paladyn_"))
+            or manifest.name.startswith(("evm_", "learning_", "darklinger_"))
         ):
             raise ArtifactPolicyError(
                 f"generated tool name is reserved: {manifest.name}"
