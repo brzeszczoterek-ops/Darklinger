@@ -74,10 +74,31 @@ class RoutedModelRuntime:
     ) -> ModelSwitchResult:
         state = self.store.load()
         previous = self.active_model_path
+        requested_task_kind = task_kind or classify_model_phase(prompt)
+        inference = getattr(self.llm, "inference", None)
+        if inference is not None:
+            if trigger == "task_route":
+                inference.begin_turn(requested_task_kind)
+            else:
+                inference.select_profile(
+                    inference.profile_for_task(requested_task_kind)
+                )
+        server_tuning = (
+            inference.consume_server_tuning()
+            if inference is not None
+            else None
+        )
         if not state.routing_enabled or not state.routing_model_paths:
+            if server_tuning is not None:
+                return await self._restart_active_with_tuning(
+                    state,
+                    server_tuning.values(),
+                    prompt=prompt,
+                    task_kind=requested_task_kind,
+                    trigger=trigger,
+                )
             return ModelSwitchResult(None, previous, previous, False)
 
-        requested_task_kind = task_kind or classify_model_phase(prompt)
         routing_strategy = (
             state.routing_strategy
             if self.allow_manual_hierarchy
@@ -126,6 +147,18 @@ class RoutedModelRuntime:
             excluded_model_paths=excluded_model_paths,
         )
         if decision is None or decision.selected_model_path == previous:
+            if server_tuning is not None:
+                return await self._restart_active_with_tuning(
+                    state,
+                    server_tuning.values(),
+                    prompt=prompt,
+                    task_kind=requested_task_kind,
+                    trigger=trigger,
+                    decision=decision,
+                    configured_candidates=configured_count,
+                    eligible_candidates=eligible_count,
+                    routing_strategy=routing_strategy,
+                )
             result = ModelSwitchResult(
                 decision,
                 previous,
@@ -176,6 +209,10 @@ class RoutedModelRuntime:
             if profile is None:
                 failures.append(f"{Path(path).name}: saved profile is missing")
                 continue
+            if server_tuning is not None:
+                profile = ModelProfile.from_dict(
+                    {**profile.to_dict(), **server_tuning.values()}
+                )
             session: LlamaServerSession | None = None
             try:
                 session = await start_llama_server(
@@ -191,6 +228,7 @@ class RoutedModelRuntime:
                 failures.append(f"{Path(path).name}: {type(error).__name__}: {error}")
                 continue
             self.session = session
+            state.profiles[path] = profile
             state.last_model_path = path
             self.store.save(state)
             result = ModelSwitchResult(
@@ -216,6 +254,105 @@ class RoutedModelRuntime:
             "model routing stopped the active server and every qualified fallback "
             "failed to start: " + "; ".join(failures)
         )
+
+    async def _restart_active_with_tuning(
+        self,
+        state: Any,
+        values: dict[str, Any],
+        *,
+        prompt: str,
+        task_kind: str,
+        trigger: str,
+        decision: ModelRouteDecision | None = None,
+        configured_candidates: int = 0,
+        eligible_candidates: int = 0,
+        routing_strategy: str = "automatic",
+    ) -> ModelSwitchResult:
+        previous = self.active_model_path
+        original = self.session.profile
+        tuned = ModelProfile.from_dict({**original.to_dict(), **values})
+        if tuned == original:
+            result = ModelSwitchResult(
+                decision,
+                previous,
+                previous,
+                False,
+                requested_task_kind=task_kind,
+                configured_candidates=configured_candidates,
+                eligible_candidates=eligible_candidates,
+                routing_strategy=routing_strategy,
+            )
+            self._record(prompt, result, trigger=trigger)
+            return result
+        binary = find_llama_server(state.server_binary)
+        if binary is None:
+            failure = "configured llama-server is unavailable"
+            result = ModelSwitchResult(
+                decision,
+                previous,
+                previous,
+                False,
+                (failure,),
+                requested_task_kind=task_kind,
+                configured_candidates=configured_candidates,
+                eligible_candidates=eligible_candidates,
+                routing_strategy=routing_strategy,
+            )
+            self._record(prompt, result, trigger=trigger)
+            return result
+        await self.session.stop()
+        try:
+            session = await start_llama_server(
+                binary,
+                tuned,
+                self.runtime_root,
+                status=self.status,
+            )
+            await self.llm.reconfigure()
+        except Exception as error:
+            # A tuning failure must not strand Darklinger without its model.
+            restored = await start_llama_server(
+                binary,
+                original,
+                self.runtime_root,
+                status=self.status,
+            )
+            self.session = restored
+            await self.llm.reconfigure()
+            failure = f"model tuning rejected: {type(error).__name__}: {error}"
+            result = ModelSwitchResult(
+                decision,
+                previous,
+                previous,
+                False,
+                (failure,),
+                requested_task_kind=task_kind,
+                configured_candidates=configured_candidates,
+                eligible_candidates=eligible_candidates,
+                routing_strategy=routing_strategy,
+            )
+            self._record(prompt, result, trigger=trigger)
+            return result
+        self.session = session
+        state.profiles[previous] = tuned
+        state.last_model_path = previous
+        self.store.save(state)
+        self.status(
+            "V applied a new Full inference configuration and safely restarted "
+            "the active local model."
+        )
+        result = ModelSwitchResult(
+            decision,
+            previous,
+            previous,
+            False,
+            requested_task_kind=task_kind,
+            configured_candidates=configured_candidates,
+            eligible_candidates=eligible_candidates,
+            routing_strategy=routing_strategy,
+        )
+        self._record(prompt, result, trigger=trigger)
+        return result
 
     async def ensure_for_phase(
         self,

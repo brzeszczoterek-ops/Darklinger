@@ -52,6 +52,8 @@ class EditionExtension(Protocol):
 
     def bind_runtime(self, authorization: object, sandbox_backend: object | None) -> None: ...
 
+    def bind_inference_controller(self, controller: object) -> None: ...
+
     def tool_names(self) -> tuple[str, ...]: ...
 
     def tool_definitions(self) -> dict[str, tuple[str, dict[str, Any]]]: ...
@@ -82,6 +84,9 @@ class PublicEditionExtension:
             )
 
     def bind_runtime(self, authorization: object, sandbox_backend: object | None) -> None:
+        return None
+
+    def bind_inference_controller(self, controller: object) -> None:
         return None
 
     def tool_names(self) -> tuple[str, ...]:

@@ -154,6 +154,11 @@ class Agent:
         self.config = config
 
         self.llm = llm or LLM()
+        set_edition = getattr(self.llm, "set_edition", None)
+        if callable(set_edition):
+            set_edition(
+                getattr(getattr(config, "edition", None), "name", "public")
+            )
         self.phase_router = phase_router
         self.response_fallback_router = response_fallback_router
 
@@ -162,6 +167,14 @@ class Agent:
         self.context_window = ContextWindowManager()
 
         self.tools = MCPTools(config)
+        bind_inference = getattr(
+            self.tools.edition_extension,
+            "bind_inference_controller",
+            None,
+        )
+        inference = getattr(self.llm, "inference", None)
+        if callable(bind_inference) and inference is not None:
+            bind_inference(inference)
 
         self.dispatcher = ToolDispatcher(
             llm=self.llm,
@@ -350,6 +363,12 @@ class Agent:
         remember: bool = True,
         creative_response: bool = False,
     ) -> str:
+        inference = getattr(self.llm, "inference", None)
+        if inference is not None:
+            inference.begin_turn(
+                "conversation",
+                creative=creative_response,
+            )
         relationship = self.memory.relationship_state
         stage = self.persona._relationship_stage(relationship)
         response_language = self._effective_response_language(prompt)

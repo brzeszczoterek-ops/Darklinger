@@ -87,3 +87,23 @@ Qualification measures the tested protocol behaviours. It is not proof that a
 model is factually correct on every subject or that its personality will feel
 identical in every conversation. New harness versions may add stronger probes
 and deliberately invalidate earlier cards.
+
+## Inference profiles
+
+Model routing decides which qualified model should perform a phase. Inference
+profiles separately decide how that model should sample its response. Public
+uses reviewed presets and selects them from the runtime-owned task kind:
+
+- `conversation` and `creative` allow more expressive sampling;
+- `coding`, `analysis`, and `tool_use` are deliberately more deterministic;
+- `research` and `document` balance fidelity with readable synthesis;
+- `balanced` is the fallback for an unclassified task.
+
+Full adds the private `full_tune_inference` tool. The persona may choose a
+preset and override supported request-time controls for the current turn or
+session. It may also stage context size, GPU/CPU allocation, batching, parallel
+slots, Flash Attention, reasoning, template, anti-repetition and cache settings.
+Server settings are range-checked immediately and consumed once at the next safe
+model boundary. The runtime stops the current server, starts the validated
+profile and restores the prior profile if startup fails. Boundary flags such as
+model path, host, port, API key and offline mode remain executor-owned.

@@ -3,6 +3,11 @@
 ## Unreleased
 
 ### Added
+- Public now selects reviewed inference presets for conversation, creative,
+  coding, analysis, research, tool-use, and document tasks. Full personas can
+  additionally tune supported request parameters per turn or session and stage
+  validated server parameters for a controlled restart at the next safe model
+  boundary.
 - The staged product rename has begun: user-facing application identity now
   reads **Darklinger**. Canonical commands and settings now use `darklinger-*`
   and `DARKLINGER_*`; the former `paladyn-*` and `PALADYN_*` forms remain
@@ -89,6 +94,9 @@
   reserved for an explicit CAPTCHA, private window, or interactive session.
 
 ### Verification scope
+- Adaptive inference profiles passed 1097 Full tests and 1022 tests in a fresh
+  Public export on 2026-09-17. This verification used deterministic local tests
+  and did not spend a live-model run.
 - The complete rename migration passed 1088 Full and 1015 freshly exported
   Public tests on 2026-09-17. Both canonical and transition command names were
   installed in the editable environment, and both canonical and legacy

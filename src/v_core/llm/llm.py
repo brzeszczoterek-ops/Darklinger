@@ -9,6 +9,7 @@ from typing import Any
 
 from openai import APIStatusError, AsyncOpenAI
 
+from ..inference import InferenceController, InferenceParameters
 from .llm_config import LLMConfig, load_llm_config
 
 
@@ -83,11 +84,17 @@ class LLM:
     def __init__(self, api_key: str | None = None):
         self._api_key = api_key
         self.config = load_llm_config()
+        self.inference = InferenceController()
         self.client = self._new_client()
         # None means untested. A strict/older GGUF template may reject the
         # OpenAI tool schema; after one explicit provider rejection DARKLINGER
         # uses its documented textual compatibility protocol for that run.
         self._native_tools_supported: bool | None = None
+
+    def set_edition(self, edition_name: str) -> None:
+        """Bind request tuning to the installed Darklinger edition."""
+
+        self.inference.edition_name = str(edition_name).strip().casefold()
 
     def _new_client(self) -> AsyncOpenAI:
         return AsyncOpenAI(
@@ -132,12 +139,30 @@ class LLM:
         """
 
         normalized = self._normalize_system_messages(messages)
+        controller = getattr(self, "inference", None)
+        tuning = (
+            controller.parameters()
+            if controller is not None
+            else InferenceParameters(
+                temperature=float(self.config.temperature),
+                top_p=float(self.config.top_p),
+            )
+        )
         request: dict[str, Any] = {
             "model": self.config.model,
             "temperature": (
-                self.config.temperature if temperature is None else float(temperature)
+                tuning.temperature if temperature is None else float(temperature)
             ),
-            "top_p": self.config.top_p,
+            "top_p": tuning.top_p,
+            "presence_penalty": tuning.presence_penalty,
+            "frequency_penalty": tuning.frequency_penalty,
+            "seed": tuning.seed,
+            "extra_body": {
+                "top_k": tuning.top_k,
+                "min_p": tuning.min_p,
+                "typical_p": tuning.typical_p,
+                "repeat_penalty": tuning.repeat_penalty,
+            },
             "messages": normalized,
             "max_tokens": max_tokens or int(os.getenv("V_CORE_MAX_TOKENS", "512")),
         }
@@ -234,10 +259,7 @@ class LLM:
                         },
                     ]
                 )
-                request["temperature"] = min(
-                    float(self.config.temperature),
-                    0.1,
-                )
+                request["temperature"] = min(float(tuning.temperature), 0.1)
             response = await self.client.chat.completions.create(**request)
             native_requested = False
         else:
@@ -325,10 +347,28 @@ class LLM:
         max_tokens: int | None = None,
     ) -> AsyncIterator[str]:
         messages = self._normalize_system_messages(messages)
+        controller = getattr(self, "inference", None)
+        tuning = (
+            controller.parameters()
+            if controller is not None
+            else InferenceParameters(
+                temperature=float(self.config.temperature),
+                top_p=float(self.config.top_p),
+            )
+        )
         response = await self.client.chat.completions.create(
             model=self.config.model,
-            temperature=self.config.temperature,
-            top_p=self.config.top_p,
+            temperature=tuning.temperature,
+            top_p=tuning.top_p,
+            presence_penalty=tuning.presence_penalty,
+            frequency_penalty=tuning.frequency_penalty,
+            seed=tuning.seed,
+            extra_body={
+                "top_k": tuning.top_k,
+                "min_p": tuning.min_p,
+                "typical_p": tuning.typical_p,
+                "repeat_penalty": tuning.repeat_penalty,
+            },
             messages=messages,
             max_tokens=max_tokens or int(os.getenv("V_CORE_MAX_TOKENS", "512")),
             stream=True,

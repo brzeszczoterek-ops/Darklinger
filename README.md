@@ -160,6 +160,15 @@ controlled profile fields, the selected model, alias, loopback host, port,
 offline mode, API key, model presets, or llama.cpp's own tools. No shell command
 is built.
 
+Request-time inference is selected independently from the model file. Public
+automatically chooses one of the reviewed presets for conversation, creative
+work, coding, analysis, research, tool use, or document work. Full exposes the
+same presets and additionally lets the active persona tune supported sampling
+controls for one turn or the current session. Full may also stage validated
+server settings, including context size and reasoning mode; those changes are
+applied only at the next safe model boundary because they require a controlled
+server restart. Public never accepts arbitrary parameter overrides.
+
 ## Local voice conversation
 
 DARKLINGER supports a fully local, half-duplex speech path:

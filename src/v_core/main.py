@@ -26,6 +26,7 @@ from .model_loader import (
     RoutedModelRuntime,
     bootstrap_interactive_model,
 )
+from .model_loader.router import classify_model_phase
 from .speech import (
     NoSpeechDetected,
     SpeechConfig,
@@ -152,11 +153,16 @@ class VCore:
         on_token: Callable[[str], None] | None = None,
     ) -> str:
 
+        task_kind = classify_model_phase(prompt)
+        inference = getattr(self.llm, "inference", None)
+        if inference is not None:
+            inference.begin_turn(task_kind)
+
         if self.model_runtime is not None:
             # Background reflection must release the shared client before the
             # one-model-at-a-time runtime unloads a GGUF and selects another.
             await self.agent.cancel_background_memory()
-            await self.model_runtime.ensure_for(prompt)
+            await self.model_runtime.ensure_for(prompt, task_kind=task_kind)
 
         return await self.agent.run(
             prompt,

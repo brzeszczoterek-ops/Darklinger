@@ -73,11 +73,13 @@ class UIRuntime:
         except Exception:
             tool_names = []
         edition = getattr(getattr(self.config, "edition", None), "name", "public")
+        inference = getattr(getattr(self.core, "llm", None), "inference", None)
         payload: dict[str, Any] = {
             "ready": not self.chat_lock.locked(),
             "edition": edition,
             "uptime_seconds": max(0, int(time.monotonic() - self.started_at)),
             "model": model,
+            "inference": inference.status() if inference is not None else {},
             "tools": {"count": len(tool_names), "active": tool_names},
             "voice": {
                 "recording": bool(
