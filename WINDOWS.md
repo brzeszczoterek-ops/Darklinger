@@ -89,8 +89,8 @@ Kod i modele najlepiej przechowywać w linuksowym systemie plików WSL, a nie w
 
 ```bash
 cd ~
-git clone https://github.com/brzeszczoterek-ops/DARKLINGER.git
-cd DARKLINGER
+git clone https://github.com/brzeszczoterek-ops/Darklinger.git
+cd Darklinger
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
