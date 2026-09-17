@@ -28,6 +28,7 @@ from .autonomy import (
     TaskContract,
 )
 from .config import Config
+from .content_policy import render_content_policy
 from .creation_budget import (
     CREATION_ATTEMPT_TOOLS,
     CREATION_TOOLS,
@@ -42,6 +43,7 @@ from .generated_tool_contract import (
     autonomous_web_traffic_contract,
     extract_generated_tool_contract,
     has_natural_fixture_candidate,
+    source_generation_objective,
 )
 from .response_preview import response_preview
 from .autonomy.local_read_scope import literal_paths, resolve_read_scope
@@ -94,6 +96,7 @@ class _ContinueAgentBatch(Exception):
 class Agent:
 
     MAX_AGENT_STEPS = 32
+    MAX_STAGNANT_SUCCESSFUL_CALLS = 6
     READ_ONLY_TOOL_NAMES = frozenset(
         {
             "read_file",
@@ -235,6 +238,40 @@ class Agent:
             )
             if controlled is not None:
                 return controlled
+
+        # A short answer to V's immediately preceding question belongs to the
+        # visible conversation.  Do not send an isolated "yes"/"of course"
+        # through the expensive semantic task classifier without the question
+        # it answers.  This rule is structural rather than language-specific:
+        # the current turn must be short, non-executable, and follow an actual
+        # question in the durable dialogue ledger.
+        short_dialogue_question = self._short_dialogue_question(prompt)
+        if short_dialogue_question:
+            if (
+                self._claims_active_chat_work(short_dialogue_question)
+                or unsupported_execution_claims(short_dialogue_question, ())
+            ):
+                trace = self._start_agent_trace(prompt)
+                answer = (
+                    "No. There are no results to show, Boss. The previous reply "
+                    "claimed work without matching tool evidence. That was a "
+                    "hallucinated status, not executed work."
+                )
+                if trace is not None:
+                    trace.record_event(
+                        "conversation_false_offer_rejected",
+                        {"reason": "previous_reply_had_no_tool_evidence"},
+                    )
+                execution = self._finish_agent_trace(trace, answer)
+                await self._remember_task(prompt, answer, execution=execution)
+                if on_token is not None:
+                    on_token(answer)
+                return answer
+            return await self._run_light_chat(
+                prompt,
+                on_token,
+                trace=self._start_agent_trace(prompt),
+            )
 
         capability = self.capabilities.dispatch(
             prompt
@@ -381,6 +418,8 @@ For this short conversational reply:
   routing, memory, evidence, observability, reliability, or tool system instead.
 - Do not blindly agree, but do not manufacture an argument either.
 - {response_rule}
+
+{render_content_policy(getattr(getattr(getattr(self, "config", None), "edition", None), "name", "public"))}
 
 Current relationship stage: {stage}.
 """.strip(),
@@ -551,10 +590,54 @@ Current relationship stage: {stage}.
             r"\s+(?:now|currently|in\s+the\s+background)\b"
             r"(?!\s+(?:would|could|might|can|is|was)\b)"
             r"|(?:^|[.!]\s+)(?:the\s+)?tests\s+(?:are\s+)?running\b"
-            r"|(?:^|[.!]\s+)results\s+in\s+(?:\d+|thirty|sixty)\s*"
-            r"(?:s\b|seconds?\b|minutes?\b)",
+            r"|\bresults\s+in\s+(?:\d+|thirty|sixty)\s*"
+            r"(?:s\b|seconds?\b|minutes?\b)"
+            r"|(?:^|[.!?]\s+)(?:i|we|i've|we've)\s+"
+            r"(?:(?:have|had)\s+)?(?:(?:just|already)\s+)?"
+            r"(?:tested|ran|executed|checked|inspected|reviewed|searched|"
+            r"visited|opened|created|built|fixed|updated)\b"
+            r"|(?:^|[.!?]\s+)(?:(?:wlasnie|właśnie|juz|już)\s+)?"
+            r"(?:przetestowal[ae]m|przetestował[ae]m|sprawdzil[ae]m|"
+            r"sprawdził[ae]m|uruchomil[ae]m|uruchomił[ae]m|"
+            r"wykonal[ae]m|wykonał[ae]m|otworzyl[ae]m|otworzył[ae]m|"
+            r"stworzyl[ae]m|stworzył[ae]m)\b",
             text,
         ))
+
+    def _short_dialogue_question(self, prompt: str) -> str:
+        """Return V's question when ``prompt`` is its terse, non-action reply.
+
+        This prevents a natural reply such as ``Oczywiście, że tak`` from
+        becoming a context-free autonomous task.  Explicit actions still go to
+        the executor, even when they are short (for example ``Tak, uruchom
+        testy``).
+        """
+
+        text = str(prompt or "").strip()
+        if not text or len(text) > 160 or text.startswith("/"):
+            return ""
+        words = re.findall(r"[^\W_]+", text, flags=re.UNICODE)
+        if not words or len(words) > 12:
+            return ""
+        contract = TaskContract.from_prompt(text)
+        if self._requests_runtime_action(text, contract):
+            return ""
+        session = getattr(getattr(self, "memory", None), "session", None)
+        context_loader = getattr(session, "context_messages", None)
+        messages = (
+            context_loader(text, limit=1, max_characters=2_000)
+            if callable(context_loader)
+            else session.messages(limit=1) if session is not None else []
+        )
+        if not messages or messages[-1].get("role") != "assistant":
+            return ""
+        previous = str(messages[-1].get("content", "")).rstrip()
+        if "?" not in previous[-500:] and "？" not in previous[-500:]:
+            return ""
+        return previous
+
+    def _is_short_dialogue_reply(self, prompt: str) -> bool:
+        return bool(self._short_dialogue_question(prompt))
 
     @staticmethod
     def _strip_unverified_completion_claim(answer: str) -> str:
@@ -714,7 +797,8 @@ Current relationship stage: {stage}.
             r"analizuj\w*|przeanalizuj\w*|przejrzyj\w*|"
             r"edytuj\w*|napisz\w*|otworz\w*|otwórz\w*|przeczyt\w*|"
             r"przeszuk\w*|sprawd\w*|stworz\w*|stwórz\w*|usun\w*|usuń\w*|"
-            r"uruchom\w*|wykonaj\w*|wyszuk\w*|znajd\w*)\b",
+            r"uruchom\w*|wykonaj\w*|wyszuk\w*|znajd\w*|znalaz\w*|"
+            r"znale\w*)\b",
             text,
         )
         if action_intent:
@@ -870,6 +954,33 @@ Current relationship stage: {stage}.
             or intent.action_requested
             or bool(intent.capabilities)
             or "runtime_review" in intent.capabilities
+        ):
+            return False
+        meaningful_tokens = re.findall(
+            r"[^\W_]+",
+            prompt,
+            flags=re.UNICODE,
+        )
+        return len(meaningful_tokens) < 16
+
+    @staticmethod
+    def _web_reference_requires_history(
+        intent: SemanticIntent,
+        prompt: str,
+    ) -> bool:
+        """Return true only for a bare web follow-up with no usable scope.
+
+        A classifier may correctly notice phrases such as "again" or "as I
+        said" while the same message also restates the complete research
+        objective.  Those discourse markers must not erase the concrete scope
+        that is present in the current turn.  Short deictic requests still use
+        dialogue history rather than guessing what "that" means.
+        """
+
+        if (
+            not intent.references_previous
+            or intent.web_query
+            or intent.public_subject
         ):
             return False
         meaningful_tokens = re.findall(
@@ -1705,10 +1816,11 @@ Current relationship stage: {stage}.
             referenced_subject = ""
             if (
                 semantic_intent is not None
-                and semantic_intent.references_previous
+                and self._web_reference_requires_history(
+                    semantic_intent,
+                    routing_prompt,
+                )
                 and not prompt_contract.requires_created_tool
-                and not semantic_intent.web_query
-                and not semantic_intent.public_subject
             ):
                 try:
                     referenced_subject = await resolve_search_reference(
@@ -2030,6 +2142,15 @@ Current relationship stage: {stage}.
             tool_definitions,
             capability_hints=capability_hints,
         )
+        set_creation_origin = getattr(self.tools, "set_creation_origin", None)
+        if callable(set_creation_origin):
+            set_creation_origin(
+                bool(
+                    contract.requires_created_tool
+                    or contract.requires_created_skill
+                    or contract.allows_artifact_fallback
+                )
+            )
         source_only_builder = any(
             isinstance(item, dict)
             and item.get("function", {}).get("name") == "learning_create_tool"
@@ -2246,6 +2367,14 @@ Current relationship stage: {stage}.
                 )
             return missing
 
+        # A provider returning HTTP 200 (or an otherwise valid tool envelope)
+        # proves only that the call ran. It does not prove that the task moved
+        # forward. Keep a separate contract-progress counter so a model cannot
+        # burn the entire step budget by varying queries while the exact same
+        # evidence requirement remains unmet.
+        stagnant_successful_calls = 0
+        last_stagnation_warning = 0
+
         async def rollover_context(
             *,
             step: int,
@@ -2336,11 +2465,60 @@ Current relationship stage: {stage}.
         for step in range(maximum_steps + 2):
             if self._creation_failure_budget_exhausted(evidence_ledger()):
                 return await self._finish_creation_failure_budget(prompt, evidence_ledger(), trace, on_token)
+            current_missing = tuple(unmet_requirements())
+            if (
+                current_missing
+                and stagnant_successful_calls
+                >= self.MAX_STAGNANT_SUCCESSFUL_CALLS
+            ):
+                missing_descriptions = self._owner_missing_descriptions(
+                    list(current_missing)
+                )
+                progress_report = self._owner_progress_report(
+                    working_summary,
+                    successful_calls,
+                    missing_descriptions,
+                    objective=prompt,
+                    failed_calls=failed_calls,
+                    stop_reason=(
+                        "successful tool calls stopped advancing the task contract"
+                    ),
+                )
+                answer = (
+                    "I stopped this run because six mechanically successful "
+                    "tool calls in a row did not reduce the task's unmet "
+                    "evidence requirements. Changing the query is not progress "
+                    "when the contract stays identical. Here's the verified "
+                    f"state:\n\n{progress_report}\n\n"
+                    "The run is blocked instead of looping or inventing a "
+                    "result. Nothing is running in the background."
+                )
+                if trace is not None:
+                    trace.record_event(
+                        "contract_progress_stalled",
+                        {
+                            "stagnant_successful_calls": (
+                                stagnant_successful_calls
+                            ),
+                            "missing": list(current_missing),
+                        },
+                    )
+                evidence = self._block_agent_trace(
+                    trace,
+                    "successful tool calls did not advance the task contract",
+                )
+                await self._remember_task(prompt, answer, execution=evidence)
+                if on_token is not None:
+                    on_token(answer)
+                return answer
             finalization_required = (
                 bool(successful_calls)
                 and not unmet_requirements()
             )
-            if finalization_required and "full_tor_inventory" in contract.required_tools:
+            if finalization_required and (
+                "full_tor_inventory" in contract.required_tools
+                or "github_repositories" in contract.required_research_facets
+            ):
                 deterministic_answer = contract.deterministic_answer(
                     successful_calls,
                     language=self._effective_response_language(routing_prompt),
@@ -2349,7 +2527,14 @@ Current relationship stage: {stage}.
                     if trace is not None:
                         trace.record_event(
                             "deterministic_result_rendered",
-                            {"contract": "tor_inventory"},
+                            {
+                                "contract": (
+                                    "tor_inventory"
+                                    if "full_tor_inventory"
+                                    in contract.required_tools
+                                    else "github_repository_candidates"
+                                )
+                            },
                         )
                     evidence = self._finish_agent_trace(trace, deterministic_answer)
                     await self._remember_task(
@@ -2372,6 +2557,39 @@ Current relationship stage: {stage}.
                     failed_calls,
                 )
             )
+            if (
+                current_missing
+                and stagnant_successful_calls >= 3
+                and stagnant_successful_calls > last_stagnation_warning
+            ):
+                last_stagnation_warning = stagnant_successful_calls
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "PALADYN progress guard: the last successful tool "
+                            "calls did not reduce these unmet requirements: "
+                            + json.dumps(
+                                list(current_missing), ensure_ascii=False
+                            )
+                            + ". A successful transport call is not task "
+                            "progress. Change evidence strategy now; do not "
+                            "merely paraphrase the query or revisit equivalent "
+                            "results. If the requirement cannot be verified, "
+                            "finish with that limitation instead of guessing."
+                        ),
+                    }
+                )
+                if trace is not None:
+                    trace.record_event(
+                        "contract_progress_warning",
+                        {
+                            "stagnant_successful_calls": (
+                                stagnant_successful_calls
+                            ),
+                            "missing": list(current_missing),
+                        },
+                    )
             created_tool_names = self._created_tool_names(successful_calls)
             if (
                 not finalization_required
@@ -2542,6 +2760,11 @@ Current relationship stage: {stage}.
                             "input condition and verify that the named exception follows "
                             "from that condition. Do not join conditions with 'or' when "
                             "they fail through different exceptions. "
+                            "Copy every GitHub owner/repository identifier exactly from "
+                            "an observed repository URL. When the requested deliverable "
+                            "is a list of GitHub tools or repositories, list repositories "
+                            "as candidates; an article or blog post that describes one is "
+                            "supporting evidence, not an additional candidate. "
                             + (
                                 "For this generated HAR analyzer, label its executed input "
                                 "as a runtime-owned synthetic test fixture. The browser "
@@ -2752,6 +2975,28 @@ Current relationship stage: {stage}.
                     raise
                 break
 
+            bounded_native_requests = self._bound_browser_evidence_batch(
+                native_requests,
+                contract,
+            )
+            if len(bounded_native_requests) != len(native_requests):
+                if trace is not None:
+                    trace.record_event(
+                        "browser_tool_batch_bounded",
+                        {
+                            "requested": [
+                                str(item.get("tool", ""))
+                                for item in native_requests
+                            ],
+                            "executed": [
+                                str(item.get("tool", ""))
+                                for item in bounded_native_requests
+                            ],
+                            "reason": "capture_each_page_before_next_navigation",
+                        },
+                    )
+                native_requests = bounded_native_requests
+
             if not answer and not native_requests and not source_owned_phase:
                 if finalization_required:
                     finalization_answer_rejections += 1
@@ -2769,6 +3014,10 @@ Current relationship stage: {stage}.
                                 working_summary,
                                 successful_calls,
                                 contract,
+                                objective=prompt,
+                                stop_reason=(
+                                    "the model returned an empty final report twice"
+                                ),
                             )
                         )
                         if trace is not None:
@@ -3012,6 +3261,21 @@ Current relationship stage: {stage}.
                 tool_request = self._parse_tool_request(final_answer)
 
                 if tool_request is None:
+                    repaired_answer, repaired_urls = (
+                        self._repair_unambiguous_observed_urls(
+                            final_answer,
+                            successful_calls,
+                        )
+                    )
+                    if repaired_urls:
+                        final_answer = repaired_answer
+                        if trace is not None:
+                            trace.record_event(
+                                "final_answer_urls_repaired",
+                                {"repairs": repaired_urls},
+                            )
+
+                if tool_request is None:
                     public_recovery = self._public_fact_recovery_request(
                         prompt,
                         contract,
@@ -3241,15 +3505,32 @@ Current relationship stage: {stage}.
                             finalization_answer_rejections += 1
                             if finalization_answer_rejections >= 2:
                                 final_answer = (
-                                    "The model mangled the grounded final report "
-                                    "twice, so I killed that rewrite loop.\n\n"
-                                    + self._verified_tool_result_fallback(
-                                        [],
-                                        verified_calls=successful_calls,
-                                        generated_contract=generated_tool_contract,
+                                    "I removed the unsupported claims from the two "
+                                    "broken rewrites. Here is the report rebuilt "
+                                    "only from evidence PALADYN actually observed:\n\n"
+                                    + self._owner_verified_final_report(
+                                        working_summary,
+                                        successful_calls,
+                                        contract,
+                                        objective=prompt,
+                                        stop_reason=(
+                                            "two model-written reports failed "
+                                            "grounding validation"
+                                        ),
                                     )
                                 )
                                 if trace is not None:
+                                    trace.record_event(
+                                        "grounded_report_salvaged",
+                                        {
+                                            "rejected_candidates": (
+                                                finalization_answer_rejections
+                                            ),
+                                            "verified_tool_calls": len(
+                                                successful_calls
+                                            ),
+                                        },
+                                    )
                                     trace.record_event(
                                         "final_answer_loop_cut_off",
                                         {
@@ -3797,6 +4078,7 @@ Current relationship stage: {stage}.
                     tool_name,
                     arguments,
                 )
+                missing_before_call = tuple(unmet_requirements())
                 ledger = evidence_ledger()
                 candidate = None
                 creation_probe = ""
@@ -3848,6 +4130,9 @@ Current relationship stage: {stage}.
                         working_summary,
                         successful_calls,
                         missing_descriptions,
+                        objective=prompt,
+                        failed_calls=failed_calls,
+                        stop_reason="an identical tool-call loop was detected",
                     )
                     answer = (
                         f"I cut this off because the model kept requesting the same "
@@ -4244,6 +4529,14 @@ Current relationship stage: {stage}.
                     tool_fallback_exhausted = False
                     successful_tools.append(tool_name)
                     successful_calls.append(call_record)
+                    missing_after_call = tuple(unmet_requirements())
+                    if (
+                        missing_after_call
+                        and missing_after_call == missing_before_call
+                    ):
+                        stagnant_successful_calls += 1
+                    else:
+                        stagnant_successful_calls = 0
                     if tool_name in {
                         "learning_create_tool",
                         "learning_create_snapshot_extractor",
@@ -4393,10 +4686,43 @@ Current relationship stage: {stage}.
                                         ),
                                         "outcome": learned_evidence.get(
                                             "outcome",
-                                            "failure",
+                                        "failure",
                                         ),
                                     },
                                 )
+
+                    if self._is_terminal_tool_provider_error(
+                        tool_error,
+                        recovery_failure_details,
+                    ):
+                        missing_evidence = unmet_requirements()
+                        final_answer = self._incomplete_task_answer(
+                            missing_evidence,
+                            failed_calls,
+                        )
+                        if trace is not None:
+                            trace.record_event(
+                                "tool_provider_unavailable",
+                                {
+                                    "tool": tool_name,
+                                    "provider": provider_tool,
+                                    "error": str(tool_error or "")[:2_000],
+                                    "failure_details": recovery_failure_details,
+                                    "retried_by_model": False,
+                                },
+                            )
+                        evidence = self._block_agent_trace(
+                            trace,
+                            "required tool provider is unavailable",
+                        )
+                        await self._remember_task(
+                            prompt,
+                            final_answer,
+                            execution=evidence,
+                        )
+                        if on_token is not None:
+                            on_token(final_answer)
+                        return final_answer
 
                 # Count persisted failures, not matching source text or consecutive
                 # error classes. Model switches, unrelated successes and context
@@ -4602,6 +4928,11 @@ Current relationship stage: {stage}.
                         working_summary,
                         successful_calls,
                         self._owner_missing_descriptions(missing_evidence),
+                        objective=prompt,
+                        failed_calls=failed_calls,
+                        stop_reason=(
+                            "tool schema recovery exhausted all qualified models"
+                        ),
                     )
                     final_answer = (
                         "PALADYN stopped this recovery loop after the active "
@@ -4678,12 +5009,17 @@ Current relationship stage: {stage}.
                                 "tor_inventory"
                                 if "full_tor_inventory" in contract.required_tools
                                 else (
-                                    "generated_tool_execution"
-                                    if contract.requires_created_tool_execution
+                                    "github_repository_candidates"
+                                    if "github_repositories"
+                                    in contract.required_research_facets
                                     else (
-                                        "generated_tool_validation"
-                                        if contract.requires_created_tool
-                                        else "first_heading"
+                                        "generated_tool_execution"
+                                        if contract.requires_created_tool_execution
+                                        else (
+                                            "generated_tool_validation"
+                                            if contract.requires_created_tool
+                                            else "first_heading"
+                                        )
                                     )
                                 )
                             )
@@ -4719,6 +5055,9 @@ Current relationship stage: {stage}.
             working_summary,
             successful_calls,
             missing_descriptions,
+            objective=prompt,
+            failed_calls=failed_calls,
+            stop_reason="the current execution batch reached its step limit",
         )
 
         if trace is not None and trace.continuous_authorized:
@@ -4829,8 +5168,19 @@ Current relationship stage: {stage}.
         summary: dict[str, list[str]] | None,
         successful_calls: list[dict[str, Any]],
         missing: list[str],
+        *,
+        objective: str = "",
+        failed_calls: list[dict[str, Any]] | None = None,
+        stop_reason: str = "",
     ) -> str:
-        """Render decision-useful task findings without inventing new facts."""
+        """Render a reusable task checkpoint without inventing new facts.
+
+        A fallback report is not merely an owner-facing apology.  It is the
+        hand-off artifact for the next attempt, so it must distinguish search
+        results from opened pages and pages whose content was actually
+        captured.  That distinction lets a later run continue from verified
+        evidence instead of repeating discovery or treating a URL as proof.
+        """
 
         tool_names = {
             str(call.get("tool", "")).strip()
@@ -4966,7 +5316,9 @@ Current relationship stage: {stage}.
                         else:
                             selected = headings
                         label = (
-                            "Verified candidates" if numbered else "Verified sections"
+                            "Observed candidate labels"
+                            if numbered
+                            else "Verified sections"
                         )
                         page_summary += f" {label}: " + "; ".join(selected[:10]) + "."
                     return page_summary[:600]
@@ -5102,15 +5454,255 @@ Current relationship stage: {stage}.
                 "continue the original objective using real tools.",
             }:
                 next_steps.append(step)
-        lines = ["Verified findings:"]
+        lines: list[str] = []
+        compact_objective = " ".join(str(objective).split()).strip()
+        if compact_objective:
+            lines.append("Recovery checkpoint:")
+            lines.append(f"Objective: {compact_objective[:1_200]}")
+            if stop_reason:
+                lines.append(f"Stop reason: {' '.join(stop_reason.split())[:800]}")
+
+        lines.append("Verified findings:")
         if findings:
             lines.extend(f"- {item}" for item in findings[-8:])
         else:
             lines.append("- No verified task findings yet.")
+
+        if compact_objective:
+            def normalized_url(value: Any) -> str:
+                raw = str(value or "").strip().rstrip(".,;:!?")
+                try:
+                    parsed = urlsplit(raw)
+                except ValueError:
+                    return ""
+                if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                    return ""
+                return urlunsplit(
+                    (
+                        parsed.scheme.casefold(),
+                        parsed.netloc.casefold(),
+                        parsed.path.rstrip("/") or "/",
+                        parsed.query,
+                        "",
+                    )
+                )
+
+            discovered: dict[str, str] = {}
+            opened: dict[str, str] = {}
+            inspected: dict[str, str] = {}
+            current_opened_url = ""
+            for call in successful_calls:
+                tool = str(call.get("tool", ""))
+                arguments = call.get("arguments", {})
+                excerpt = str(call.get("result_excerpt", ""))
+                if tool == "web_search":
+                    try:
+                        payload = json.loads(excerpt)
+                    except (TypeError, json.JSONDecodeError):
+                        payload = None
+                    if isinstance(payload, dict) and isinstance(
+                        payload.get("results"), list
+                    ):
+                        for item in payload["results"]:
+                            if not isinstance(item, dict):
+                                continue
+                            url = normalized_url(item.get("url"))
+                            if not url:
+                                continue
+                            title = " ".join(str(item.get("title", "")).split())
+                            discovered.setdefault(url, title)
+                if tool in {"browser_navigate", "web_read"} and isinstance(
+                    arguments, dict
+                ):
+                    url = normalized_url(arguments.get("url"))
+                    if url:
+                        opened.setdefault(url, "")
+                        current_opened_url = url
+                        if tool == "web_read":
+                            inspected.setdefault(url, "")
+                if tool == "browser_snapshot":
+                    page_match = re.search(
+                        r"Page URL:\s*\[?(https?://[^\s\])]+)",
+                        excerpt,
+                        flags=re.IGNORECASE,
+                    )
+                    url = normalized_url(
+                        page_match.group(1) if page_match else current_opened_url
+                    )
+                    if url:
+                        inspected.setdefault(url, "")
+
+            # Search/listing pages are transport, not subject-matter evidence.
+            inspected_detail = {
+                url: title
+                for url, title in inspected.items()
+                if not TaskContract.is_search_listing_url(url)
+            }
+            opened_only = {
+                url: discovered.get(url, title)
+                for url, title in opened.items()
+                if url not in inspected and not TaskContract.is_search_listing_url(url)
+            }
+            discovered_only = {
+                url: title
+                for url, title in discovered.items()
+                if url not in opened and url not in inspected
+            }
+
+            lines.append("Reusable source ledger:")
+            if inspected_detail:
+                for url in list(inspected_detail)[:8]:
+                    title = discovered.get(url, "")
+                    label = f" — {title}" if title else ""
+                    lines.append(
+                        f"- Inspected (page content captured): {url}{label}"
+                    )
+            if opened_only:
+                for url, title in list(opened_only.items())[:8]:
+                    label = f" — {title}" if title else ""
+                    lines.append(
+                        f"- Opened only (content not captured): {url}{label}"
+                    )
+            if discovered_only:
+                for url, title in list(discovered_only.items())[:8]:
+                    label = f" — {title}" if title else ""
+                    lines.append(
+                        f"- Discovered only (not opened or evaluated): {url}{label}"
+                    )
+            if not inspected_detail and not opened_only and not discovered_only:
+                lines.append("- No reusable online source evidence was captured.")
+
+            limitations: list[str] = []
+            requested_hosts: list[tuple[str, str]] = []
+            # Product and host names are commonly inflected in natural speech
+            # (for example Polish "GitHuba").  Match the stable brand stem,
+            # while the actual proof check remains the exact github.com host.
+            if re.search(r"\bgithub[\w-]*\b", compact_objective, re.IGNORECASE):
+                requested_hosts.append(("GitHub", "github.com"))
+            for label, host in requested_hosts:
+                matching = [
+                    url
+                    for url in inspected_detail
+                    if (urlsplit(url).hostname or "").casefold().endswith(host)
+                ]
+                if not matching:
+                    limitations.append(
+                        f"The objective required {label}, but no {label} page "
+                        "content was inspected. Search snippets and third-party "
+                        "articles do not satisfy that requirement."
+                    )
+            if opened_only:
+                limitations.append(
+                    "Opening a URL proves navigation only; those pages cannot be "
+                    "used as factual support until their content is captured."
+                )
+            if discovered_only:
+                limitations.append(
+                    "Discovery results are leads, not verified findings or accepted "
+                    "candidates."
+                )
+            if limitations:
+                lines.append("Evidence limits:")
+                lines.extend(f"- {item}" for item in limitations)
+
+            resume_steps: list[str] = []
+            if requested_hosts and any(
+                "no GitHub page content" in item for item in limitations
+            ):
+                resume_steps.append(
+                    "Search GitHub directly, open concrete repository pages, and "
+                    "capture each repository's README or documentation before "
+                    "ranking candidates."
+                )
+            if opened_only:
+                resume_steps.append(
+                    "Capture and inspect the pages marked 'Opened only'; do not "
+                    "repeat the searches that already produced the leads above."
+                )
+            if failed_calls:
+                last_failure = failed_calls[-1]
+                detail = " ".join(
+                    str(
+                        last_failure.get("error")
+                        or last_failure.get("result_excerpt")
+                        or "unknown failure"
+                    ).split()
+                )[:500]
+                lines.append("Last execution failure:")
+                lines.append(
+                    f"- {last_failure.get('tool') or 'unknown tool'}: {detail}"
+                )
+                resume_steps.append(
+                    "Continue after the recorded failure using the preserved ledger; "
+                    "do not discard successful earlier calls."
+                )
+            if resume_steps:
+                lines.append("Resume from here:")
+                lines.extend(f"- {item}" for item in resume_steps)
+
         if next_steps:
             lines.append("Still open:")
             lines.extend(f"- {item}" for item in next_steps[:8])
         return "\n".join(lines)
+
+    @staticmethod
+    def _repair_unambiguous_observed_urls(
+        answer: str,
+        successful_calls: list[dict[str, Any]],
+    ) -> tuple[str, list[dict[str, str]]]:
+        """Replace a hallucinated path only when the observed URL is unique.
+
+        Language models occasionally reproduce a real page with a translated,
+        truncated, or otherwise invented path.  A single bad path must not
+        discard an otherwise grounded report.  Host equality plus exactly one
+        observed URL on that host makes the repair deterministic; ambiguous
+        hosts are deliberately left to the normal grounding validator.
+        """
+
+        url_pattern = re.compile(r"https?://[^\s<>\[\]{}()\"']+")
+        observed_by_host: dict[str, set[str]] = {}
+        observed_urls: set[str] = set()
+        evidence_tools = {
+            "browser_snapshot",
+            "web_search",
+            "web_read",
+            "full_tor_search",
+            "full_tor_fetch",
+            "full_tor_inventory",
+            "full_tor_browser_inventory",
+        }
+        for call in successful_calls:
+            if (
+                call.get("status", "succeeded") != "succeeded"
+                or call.get("tool") not in evidence_tools
+            ):
+                continue
+            for match in url_pattern.finditer(
+                str(call.get("result_excerpt", ""))
+            ):
+                observed = match.group(0).rstrip(".,;:!?")
+                hostname = (urlsplit(observed).hostname or "").casefold()
+                if not hostname:
+                    continue
+                observed_urls.add(observed)
+                observed_by_host.setdefault(hostname, set()).add(observed)
+
+        replacements: dict[str, str] = {}
+        for match in url_pattern.finditer(answer):
+            candidate = match.group(0).rstrip(".,;:!?")
+            if candidate in observed_urls:
+                continue
+            hostname = (urlsplit(candidate).hostname or "").casefold()
+            matches = observed_by_host.get(hostname, set())
+            if len(matches) == 1:
+                replacements[candidate] = next(iter(matches))
+
+        repaired = answer
+        repairs: list[dict[str, str]] = []
+        for candidate, observed in replacements.items():
+            repaired = repaired.replace(candidate, observed)
+            repairs.append({"from": candidate, "to": observed})
+        return repaired, repairs
 
     @staticmethod
     def _owner_missing_descriptions(missing: list[str]) -> list[str]:
@@ -5188,6 +5780,11 @@ Current relationship stage: {stage}.
                 if item.startswith("browser_evidence:detail_sources=")
                 else "inspect another independent source that matches the requested subject"
                 if item.startswith("browser_evidence:topic_sources=")
+                else (
+                    "copy every GitHub owner/repository identifier exactly from "
+                    "the observed repository URL"
+                )
+                if item.startswith("answer:ungrounded_repository_identifiers=")
                 else labels.get(item, item.replace("_", " "))
             )
             for item in missing
@@ -5199,6 +5796,9 @@ Current relationship stage: {stage}.
         summary: dict[str, list[str]] | None,
         successful_calls: list[dict[str, Any]],
         contract: TaskContract,
+        *,
+        objective: str = "",
+        stop_reason: str = "",
     ) -> str:
         """Render structural research evidence when prose generation fails.
 
@@ -5207,14 +5807,20 @@ Current relationship stage: {stage}.
         in browser snapshots and states their evidentiary limit explicitly.
         """
 
-        report = cls._owner_progress_report(summary, successful_calls, [])
-        if not contract.required_research_facets:
-            return report
+        report = cls._owner_progress_report(
+            summary,
+            successful_calls,
+            [],
+            objective=objective,
+            stop_reason=stop_reason,
+        )
 
         item_records: list[tuple[str, str]] = []
         image_records: list[tuple[str, str]] = []
+        text_records: list[tuple[str, str]] = []
         seen_items: set[str] = set()
         seen_images: set[str] = set()
+        seen_text: set[str] = set()
         current_url = ""
         for call in successful_calls:
             tool = str(call.get("tool", ""))
@@ -5237,6 +5843,31 @@ Current relationship stage: {stage}.
                 re.MULTILINE | re.IGNORECASE,
             )
             source_url = page_match.group(1) if page_match else current_url
+
+            for line in excerpt.splitlines():
+                text_match = re.search(
+                    r"\b(?:paragraph|blockquote|text)\s*(?:\"([^\"]+)\"|:\s*(.+))$",
+                    line,
+                    re.IGNORECASE,
+                )
+                if text_match is None:
+                    continue
+                observed_text = " ".join(
+                    next(
+                        value
+                        for value in text_match.groups()
+                        if value is not None
+                    ).split()
+                ).strip(" .:-")
+                key = observed_text.casefold()
+                if (
+                    len(observed_text) < 30
+                    or key in seen_text
+                    or observed_text.startswith("[PALADYN ")
+                ):
+                    continue
+                seen_text.add(key)
+                text_records.append((observed_text[:360], source_url))
 
             article_blocks = re.split(
                 r"(?=^\s*-\s+article\s*:)",
@@ -5280,6 +5911,11 @@ Current relationship stage: {stage}.
                     image_records.append((label, source_url))
 
         lines = [report]
+        if text_records:
+            lines.append("Observed source excerpts:")
+            for observed_text, source_url in text_records[:6]:
+                source_note = f" Source: {source_url}." if source_url else ""
+                lines.append(f"- \u201c{observed_text}\u201d{source_note}")
         if "item_list" in contract.required_research_facets and item_records:
             lines.append("Observed item records:")
             for label, source_url in item_records[:12]:
@@ -5514,14 +6150,59 @@ Current relationship stage: {stage}.
                 and anchored_following is not None
             ):
                 primary = anchored_following
-            elif Agent._looks_like_discovery_preamble(primary, clauses[1]):
-                primary = clauses[1]
+            else:
+                # Voice input often contains more than one conversational
+                # sentence before the actual request (for example a greeting
+                # followed by "how is your evening?"). Skipping at most one
+                # sentence turned that second pleasantry into the web query.
+                # Advance through every structurally short preamble until the
+                # first information-dense clause, without relying on a list of
+                # greeting words or on the language being Polish or English.
+                primary_index = 0
+                while (
+                    primary_index + 1 < len(clauses)
+                    and Agent._looks_like_discovery_preamble(
+                        clauses[primary_index],
+                        clauses[primary_index + 1],
+                    )
+                ):
+                    primary_index += 1
+                primary = clauses[primary_index]
+        # Voice requests often name the discovery surface in one sentence and
+        # put the actual subject in the next one: "find tools on GitHub. Tools
+        # for darknet OSINT...".  Do not let the platform anchor amputate that
+        # adjacent scope.  The continuation is joined only when it contains a
+        # second concrete identifier, so a following instruction such as "do
+        # not install anything" cannot become search material.
+        joined_platform_scope = False
+        try:
+            selected_index = clauses.index(primary)
+        except ValueError:
+            selected_index = -1
+        if (
+            selected_index >= 0
+            and selected_index + 1 < len(clauses)
+            and re.search(
+                r"\b(?:github|gitlab|bitbucket)\w*\b",
+                primary,
+                re.IGNORECASE,
+            )
+        ):
+            continuation = clauses[selected_index + 1]
+            continuation_words = re.findall(
+                r"[^\W_]+(?:[-'][^\W_]+)*",
+                continuation,
+                re.UNICODE,
+            )
+            if Agent._discovery_anchor_index(continuation_words) is not None:
+                primary = f"{primary} {continuation}"
+                joined_platform_scope = True
         primary_words = re.findall(
             r"[^\W_]+(?:[-'][^\W_]+)*",
             primary,
             re.UNICODE,
         )
-        if len(primary_words) > 18:
+        if len(primary_words) > 18 and not joined_platform_scope:
             anchor = Agent._discovery_anchor_index(primary_words)
             if anchor is not None:
                 primary = " ".join(primary_words[max(0, anchor - 3) : anchor + 1])
@@ -6001,7 +6682,13 @@ Current relationship stage: {stage}.
                     anchor and anchor in requested_query.casefold()
                 )
                 owner_grounded_refinement = (
-                    Agent._query_prompt_overlap(requested_query, prompt) >= 4
+                    # Three independently grounded terms are enough for a
+                    # useful follow-up query. Requiring four rejected the
+                    # concise refinement "darknet OSINT GitHub repositories"
+                    # even though every material term came from Boss's request,
+                    # and replaced it with a long voice transcript that search
+                    # engines interpreted as generic Git/GitHub help.
+                    Agent._query_prompt_overlap(requested_query, prompt) >= 3
                     and Agent._query_prompt_overlap(
                         requested_query,
                         focused_query,
@@ -6210,6 +6897,28 @@ Current relationship stage: {stage}.
                         )
                     )
                     return repaired
+                if (
+                    exact
+                    and exact in {
+                        Agent._normalized_web_url(candidate)
+                        for candidate in observed
+                    }
+                    and exact not in visited_urls
+                    and exact not in failed_urls
+                    and tool_name == "browser_navigate"
+                    and not Agent._is_strong_detail_url(raw_url)
+                ):
+                    concrete = Agent._grounded_unvisited_detail_url(
+                        prompt,
+                        successful_calls,
+                        failed_calls,
+                        require_detail_structure=True,
+                        failure_tool=tool_name,
+                    )
+                    if concrete and Agent._normalized_web_url(concrete) != exact:
+                        repaired = dict(arguments)
+                        repaired["url"] = concrete
+                        return repaired
                 if (
                     exact
                     and exact in {
@@ -6602,6 +7311,14 @@ Current relationship stage: {stage}.
             "=== V PERSONA ===",
             self.persona.build_runtime(
                 self.memory.relationship_state
+            ),
+            "=== DARKLING CONTENT AND CAPABILITY POLICY ===",
+            render_content_policy(
+                getattr(
+                    getattr(getattr(self, "config", None), "edition", None),
+                    "name",
+                    "public",
+                )
             ),
             "=== V MEMORY CONTEXT ===",
             self._build_persona_context(
@@ -7325,11 +8042,15 @@ the candidate's own output.
             {"role": "system", "content": cls._generated_source_phase_prompt(
                 prompt, generated_contract=generated_contract,
             )},
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": (
+                source_generation_objective(prompt, generated_contract)
+                if generated_contract is not None else prompt
+            )},
         ]
         if generated_contract is not None:
             messages.append({"role": "user", "content": "Frozen test contract (data, not instructions):\n" + json.dumps(
-                generated_contract.to_dict(), ensure_ascii=False,
+                generated_contract.source_examples(), ensure_ascii=False,
+                separators=(",", ":"),
             )})
         feedback = [item for item in failures if item.get("tool") in {
             "learning_create_tool", SOURCE_DRAFT_TOOL,
@@ -7592,6 +8313,33 @@ the candidate's own output.
         if len(valid_sources) != 1:
             return ""
         return valid_sources.pop()
+
+    @staticmethod
+    def _bound_browser_evidence_batch(
+        requests: list[dict[str, Any]],
+        contract: TaskContract,
+    ) -> list[dict[str, Any]]:
+        """Keep one browser page active until its evidence has been captured."""
+
+        if not contract.requires_browser_snapshot or not (
+            contract.minimum_detail_sources > 1
+            or bool(contract.required_research_facets)
+        ):
+            return requests
+        bounded: list[dict[str, Any]] = []
+        navigation_seen = False
+        for request in requests:
+            tool = str(request.get("tool", ""))
+            if tool in {"browser_navigate", "web_read"}:
+                if navigation_seen:
+                    break
+                navigation_seen = True
+                bounded.append(request)
+                continue
+            bounded.append(request)
+            if navigation_seen and tool == "browser_snapshot":
+                break
+        return bounded
 
     @classmethod
     def _runtime_grounded_required_tool_request(
@@ -8133,11 +8881,35 @@ the candidate's own output.
             parsed = urlsplit(url)
         except ValueError:
             return False
-        segments = {
+        ordered_segments = [
             unquote(segment).casefold()
             for segment in parsed.path.split("/")
             if segment
-        }
+        ]
+        segments = set(ordered_segments)
+        hostname = (parsed.hostname or "").casefold()
+        if hostname in {"github.com", "www.github.com"}:
+            reserved_roots = {
+                "collections",
+                "events",
+                "features",
+                "login",
+                "marketplace",
+                "orgs",
+                "search",
+                "settings",
+                "signup",
+                "sponsors",
+                "topics",
+                "trending",
+            }
+            # A GitHub repository root has exactly owner/repository. Tabs such
+            # as issues, pulls, security and pulse are supporting navigation,
+            # not independent candidates for a research report.
+            return (
+                len(ordered_segments) == 2
+                and ordered_segments[0] not in reserved_roots
+            )
         if segments.intersection(
             {
                 "ad",
@@ -9293,6 +10065,37 @@ the candidate's own output.
         )
 
     @staticmethod
+    def _is_terminal_tool_provider_error(
+        error: str | None,
+        failure_details: dict[str, Any] | None,
+    ) -> bool:
+        """Return whether another model request cannot restore the provider.
+
+        Rephrasing a query cannot install a missing browser binary or reopen a
+        provider circuit.  Stop at the first trustworthy infrastructure
+        diagnosis instead of spending the remaining agent budget on cosmetic
+        variants of the same call.
+        """
+
+        details = failure_details or {}
+        reason = str(details.get("reason", "")).casefold()
+        if reason in {
+            "matching_providers_circuit_open",
+            "no_eligible_provider",
+        }:
+            return True
+
+        text = str(error or "").casefold()
+        missing_browser_markers = (
+            "browser is not installed",
+            'browser "firefox" is not installed',
+            "install-browser firefox",
+            "expected executable at",
+            "executable doesn't exist at",
+        )
+        return any(marker in text for marker in missing_browser_markers)
+
+    @staticmethod
     def _validate_tool_argument_value(
         value: Any,
         schema: dict[str, Any],
@@ -9905,10 +10708,16 @@ the candidate's own output.
             r"gathering|collecting|processing|working on)\b",
             r"\b(?:i'll|i will|we'll|we will)\s+(?:now\s+)?"
             r"(?:start|initiate|begin|launch|extract|mine|gather|collect|"
-            r"process|continue|report back|return with|send you|call|contact|"
+            r"process|continue|compile|format|present|summari[sz]e|evaluate|"
+            r"analy[sz]e|review|dive into|report back|return with|send you|call|contact|"
             r"connect|access|hack|breach|exploit|ring|phone|tell|speak|run|"
             r"execute|install|write|create|delete|message|email|download|upload|"
             r"use|open|visit|navigate|search|browse)\b",
+            r"\b(?:i|we)\s+(?:now\s+)?(?:still\s+)?(?:need|have)\s+to\s+"
+            r"(?:start|initiate|begin|launch|extract|mine|gather|collect|"
+            r"process|continue|compile|format|present|summari[sz]e|evaluate|"
+            r"analy[sz]e|review|inspect|explore|search|browse|open|visit|"
+            r"navigate|use|run|execute)\b",
             r"\b(?:i'm|i am|we're|we are)\s+going\s+to\s+"
             r"(?:call|contact|connect|access|hack|breach|exploit|ring|phone|"
             r"tell|speak|use|run|execute|install|write|create|delete|send|"
@@ -9929,7 +10738,7 @@ the candidate's own output.
             r"\blet me\s+(?:dive|dig|look into|check|inspect|explore|scan|"
             r"analy[sz]e|extract|review|search|navigate|open|visit|use|call)\b",
             r"\b(?:i'll|i will)\s+(?:walk through what i (?:see|find)|"
-            r"take a look|dig into|look into|check|inspect|explore)\b",
+            r"take a look|dive into|dig into|look into|check|inspect|explore)\b",
             r"\b(?:i|we)\s+(?:did not|didn't|could not|couldn't|have not|"
             r"haven't)\s+(?:finish|complete)\b",
             r"\b(?:scope|evidence)\s+(?:is|was)\s+insufficient\b",

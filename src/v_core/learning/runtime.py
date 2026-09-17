@@ -11,6 +11,7 @@ from v_core.autonomy import AuthorizationGuard
 from v_core.generated_tool_contract import GeneratedToolContract
 from v_core.sandbox import BubblewrapBackend, SandboxLimits, SandboxSpec
 
+from .capability_audit import assess_skill, assess_tool
 from .models import (
     ArtifactKind,
     ArtifactRecord,
@@ -139,6 +140,45 @@ class LearningRuntime:
         self.task_scope_key = hashlib.sha256(
             str(workspace).encode("utf-8")
         ).hexdigest()[:32]
+        self.creation_origin = "unknown"
+        self.creation_task_id = ""
+
+    def set_creation_context(self, *, origin: str, task_id: str = "") -> None:
+        """Bind runtime-owned provenance for artifacts created in this turn."""
+
+        self.creation_origin = (
+            origin
+            if origin in {"owner_requested", "agent_initiated", "unknown"}
+            else "unknown"
+        )
+        self.creation_task_id = clean_text(task_id, maximum=128)
+
+    def capability_audits(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        """Return recent verified capability assessments without source content."""
+
+        maximum = max(1, min(int(limit), 500))
+        records = [
+            dict(item["data"])
+            for item in self.store.audit_journal.read_verified()
+            if item["event"] == "capability_assessed"
+        ]
+        return records[-maximum:]
+
+    def _record_capability_assessment(
+        self,
+        record: ArtifactRecord,
+        assessment: object,
+    ) -> None:
+        payload = dict(assessment.to_dict())
+        payload.update(
+            {
+                "artifact_id": record.artifact_id,
+                "artifact_digest": record.digest,
+                "scope": record.scope.value,
+                "task_id": self.creation_task_id,
+            }
+        )
+        self.store.audit_journal.append("capability_assessed", payload)
 
     def record_evidence(
         self,
@@ -430,19 +470,34 @@ class LearningRuntime:
         self.policy.validate_tool_manifest(manifest)
         self.policy.validate_tool_source_envelope(source)
         self._validate_lesson_links(manifest.lesson_ids, manifest.scope)
-        return self.store.stage_tool(
+        record = self.store.stage_tool(
             manifest,
             source,
             scope_key=self._scope_key(manifest.scope),
         )
+        self._record_capability_assessment(
+            record,
+            assess_tool(
+                manifest,
+                source,
+                privileged=self.policy.privileged_generated_code,
+                creation_origin=self.creation_origin,
+            ),
+        )
+        return record
 
     def stage_skill(self, manifest: SkillManifest) -> ArtifactRecord:
         self.policy.may_stage(manifest.scope)
         self._validate_lesson_links(manifest.lesson_ids, manifest.scope)
-        return self.store.stage_skill(
+        record = self.store.stage_skill(
             manifest,
             scope_key=self._scope_key(manifest.scope),
         )
+        self._record_capability_assessment(
+            record,
+            assess_skill(manifest, creation_origin=self.creation_origin),
+        )
+        return record
 
     async def create_tool(
         self,

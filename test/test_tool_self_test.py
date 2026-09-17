@@ -12,6 +12,8 @@ from v_core.memory.session import Session
 from v_core.persona.kernel import IdentityKernel
 from v_core.persona.runtime import PersonaRuntime
 from v_core.persona.voice import VoiceProfile
+from v_core.mcp_tools import MCPTools
+from v_core.osint_self_test import self_test_osint_tool
 
 
 LOCAL_TOOLS = ('read_file', 'write_file', 'list_directory', 'create_directory',
@@ -70,6 +72,7 @@ async def test_local_fixtures_and_unknown_tools(tmp_path):
     assert 'unknown' not in provider.calls
     assert list(tmp_path.iterdir()) == []
     assert 'not an OS sandbox' in text
+    assert evidence['live_network_tests'] == 0
 
 
 @pytest.mark.asyncio
@@ -151,6 +154,78 @@ async def test_timeout_and_cleanup(tmp_path):
     _, evidence = await run_checks(provider, definitions('read_file'), timeout=0.01)
     assert evidence['counts']['failed'] == 1
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_edition_fixture_is_reported_without_calling_live_provider(tmp_path):
+    class Extension:
+        def handles_tool(self, name):
+            return name == 'edition_network_tool'
+
+        async def self_test_tool(self, name):
+            return {'tool': name, 'case': 'offline_protocol_fixture', 'status': 'passed',
+                    'reason': 'Matched fixture.', 'evidence_level': 'deterministic_offline_fixture',
+                    'live_network': False}
+
+    provider = LocalProvider(tmp_path)
+    provider.edition_extension = Extension()
+    _, evidence = await run_checks(provider, definitions('edition_network_tool'))
+    assert evidence['counts'] == {'passed': 1, 'failed': 0, 'not_tested': 0}
+    assert evidence['live_network_tests'] == 0
+    assert provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_edition_fixture_failure_is_not_reported_as_untested(tmp_path):
+    class Extension:
+        def handles_tool(self, name):
+            return True
+
+        async def self_test_tool(self, name):
+            raise RuntimeError('fixture broke')
+
+    provider = LocalProvider(tmp_path)
+    provider.edition_extension = Extension()
+    _, evidence = await run_checks(provider, definitions('edition_network_tool'))
+    assert evidence['counts'] == {'passed': 0, 'failed': 1, 'not_tested': 0}
+    assert evidence['results'][0]['evidence_level'] == 'deterministic_offline_fixture'
+
+
+@pytest.mark.asyncio
+async def test_public_web_fixtures_preserve_search_read_grounding():
+    search = await self_test_osint_tool('web_search', MCPTools)
+    read = await self_test_osint_tool('web_read', MCPTools)
+    assert search['status'] == 'passed'
+    assert read['status'] == 'passed'
+    assert search['live_network'] is False
+    assert read['live_network'] is False
+    assert await self_test_osint_tool('unknown', MCPTools) is None
+
+
+@pytest.mark.asyncio
+async def test_core_osint_fixtures_integrate_without_live_provider_calls(tmp_path):
+    class Provider(LocalProvider):
+        async def self_test_tool(self, name):
+            return await self_test_osint_tool(name, MCPTools)
+
+    provider = Provider(tmp_path)
+    _, evidence = await run_checks(provider, definitions('web_search', 'web_read'))
+    assert evidence['counts'] == {'passed': 2, 'failed': 0, 'not_tested': 0}
+    assert evidence['functional_tests'] == 2
+    assert evidence['live_network_tests'] == 0
+    assert provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_core_fixture_failure_is_not_reported_as_untested(tmp_path):
+    class Provider(LocalProvider):
+        async def self_test_tool(self, name):
+            raise RuntimeError('fixture broke')
+
+    provider = Provider(tmp_path)
+    _, evidence = await run_checks(provider, definitions('web_search'))
+    assert evidence['counts'] == {'passed': 0, 'failed': 1, 'not_tested': 0}
+    assert evidence['results'][0]['evidence_level'] == 'deterministic_offline_fixture'
 
 
 @pytest.mark.asyncio

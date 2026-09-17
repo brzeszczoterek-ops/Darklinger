@@ -46,6 +46,7 @@ const ui = {
   ownerCards: byId("owner-cards"),
   ownerCapabilities: byId("owner-capabilities"),
   foundry: byId("foundry-state"),
+  capabilityAuditList: byId("capability-audit-list"),
   proposalList: byId("proposal-list"),
   shutdown: byId("shutdown"),
 };
@@ -209,6 +210,25 @@ function renderOwner(owner) {
   });
   renderChips(ui.ownerCapabilities, owner.capabilities || [], 10);
   ui.foundry.textContent = `FOUNDRY // ${owner.foundry || "unavailable"}`;
+  ui.capabilityAuditList.replaceChildren();
+  (owner.capability_audits || []).forEach((audit) => {
+    const row = document.createElement("article");
+    row.className = `capability-audit ${audit.risk || "review"}`;
+    const title = document.createElement("strong");
+    const body = document.createElement("p");
+    title.textContent = `${String(audit.risk || "review").toUpperCase()} // ${audit.name}`;
+    const details = [...(audit.primitives || []), ...(audit.reasons || [])];
+    body.textContent = `${audit.kind || "artifact"} · ${audit.origin || "unknown"}`
+      + (details.length ? ` · ${details.join(", ")}` : "");
+    row.append(title, body);
+    ui.capabilityAuditList.append(row);
+  });
+  if (!(owner.capability_audits || []).length) {
+    const empty = document.createElement("span");
+    empty.className = "proposal-empty";
+    empty.textContent = "NO SENSITIVE CAPABILITY CHANGES";
+    ui.capabilityAuditList.append(empty);
+  }
   ui.proposalList.replaceChildren();
   (owner.proposals || []).forEach((proposal) => {
     const row = document.createElement("article");

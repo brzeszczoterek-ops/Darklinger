@@ -696,6 +696,193 @@ def test_task_contract_routes_english_tor_research_to_report_artifact() -> None:
     assert contract.requires_file_read is False
 
 
+def test_github_source_wins_over_darknet_tool_topic_in_polish_request() -> None:
+    prompt = (
+        "Z uwagi na to, że brakuje ci narzędzi i umiejętności do "
+        "przeszukiwania darknetu, wejdź na GitHuba i poszukaj na GitHubie "
+        "zestawów narzędzi do OSINT-u w darknecie. Przeszukaj GitHuba, "
+        "a to, co może się przydać, najpierw mi pokaż."
+    )
+
+    contract = TaskContract.from_prompt(prompt)
+
+    assert TaskContract.prefers_tor(prompt) is False
+    assert contract.requires_browser_navigation is True
+    assert contract.requires_web_discovery is True
+    assert contract.required_tools == ()
+    assert contract.required_capabilities == ()
+
+
+def test_github_candidate_request_requires_two_observed_repositories() -> None:
+    prompt = (
+        "Znajdź na GitHubie przydatne narzędzia i umiejętności dotyczące "
+        "darknetu, OSINT i cyber security. Przedstaw konkretną listę do "
+        "mojego zatwierdzenia, zanim cokolwiek przyswoisz."
+    )
+
+    contract = TaskContract.from_prompt(prompt)
+
+    assert contract.required_research_facets == ("github_repositories",)
+    assert contract.minimum_detail_sources == 2
+
+
+def test_explicit_first_github_result_remains_a_single_source_task() -> None:
+    contract = TaskContract.from_prompt(
+        "Search GitHub for I2P tools, inspect the first result, and report its actual repo."
+    )
+
+    assert contract.required_research_facets == ()
+    assert contract.minimum_detail_sources == 1
+
+
+def test_github_candidate_contract_does_not_count_article_as_repository() -> None:
+    contract = TaskContract.from_prompt(
+        "Find useful GitHub tools for darknet OSINT and present a report for approval."
+    )
+    repo_one = "https://github.com/thamore/master-osintv4-"
+    article = "https://brandefense.io/blog/dark-web-osint-tools"
+    calls = [
+        {
+            "tool": "web_search",
+            "status": "succeeded",
+            "arguments": {"query": "darknet OSINT GitHub repositories"},
+            "result_excerpt": f"{repo_one}\n{article}",
+        },
+        {
+            "tool": "browser_navigate",
+            "status": "succeeded",
+            "arguments": {"url": repo_one},
+            "result_excerpt": f"- Page URL: {repo_one}",
+        },
+        {
+            "tool": "browser_snapshot",
+            "status": "succeeded",
+            "arguments": {},
+            "result_excerpt": (
+                f"- Page URL: {repo_one}\n"
+                "- Page Title: thamore/master-osintv4- · GitHub\n"
+                "- paragraph: Curated OSINT resources."
+            ),
+        },
+        {
+            "tool": "browser_navigate",
+            "status": "succeeded",
+            "arguments": {"url": article},
+            "result_excerpt": f"- Page URL: {article}",
+        },
+        {
+            "tool": "browser_snapshot",
+            "status": "succeeded",
+            "arguments": {},
+            "result_excerpt": (
+                f"- Page URL: {article}\n"
+                "- Page Title: Dark Web OSINT Tools\n"
+                "- paragraph: A survey article."
+            ),
+        },
+    ]
+
+    assert "browser_evidence:detail_sources=1/2" in contract.unmet(calls)
+
+
+def test_github_candidate_answer_uses_only_observed_repository_pages() -> None:
+    contract = TaskContract.from_prompt(
+        "Find useful GitHub tools for darknet OSINT and present a report for approval."
+    )
+    repo_one = "https://github.com/thamore/master-osintv4-"
+    repo_two = "https://github.com/tekcin/robin_scrapper"
+    article = "https://brandefense.io/blog/dark-web-osint-tools"
+    calls = [
+        {
+            "tool": "web_search",
+            "status": "succeeded",
+            "arguments": {"query": "darknet OSINT GitHub repositories"},
+            "result_excerpt": f"{repo_one}\n{repo_two}\n{article}",
+        },
+    ]
+    for url, title in (
+        (repo_one, "thamore/master-osintv4- · GitHub"),
+        (article, "Dark Web OSINT Tools"),
+        (repo_two, "tekcin/robin_scrapper · GitHub"),
+    ):
+        calls.extend(
+            [
+                {
+                    "tool": "browser_navigate",
+                    "status": "succeeded",
+                    "arguments": {"url": url},
+                    "result_excerpt": f"- Page URL: {url}",
+                },
+                {
+                    "tool": "browser_snapshot",
+                    "status": "succeeded",
+                    "arguments": {},
+                    "result_excerpt": (
+                        f"- Page URL: {url}\n"
+                        f"- Page Title: {title}\n"
+                        "- paragraph: Observed source details."
+                    ),
+                },
+            ]
+        )
+
+    assert contract.unmet(calls) == []
+    answer = contract.deterministic_answer(calls, language="Polish")
+
+    assert answer is not None
+    assert "thamore/master-osintv4-" in answer
+    assert "tekcin/robin_scrapper" in answer
+    assert "brandefense" not in answer.casefold()
+    assert "Niczego jeszcze nie instalowałam" in answer
+    assert "zatwierdzasz" in answer
+
+
+def test_github_source_preceding_review_action_wins_in_spoken_polish() -> None:
+    prompt = (
+        "Ponieważ nie masz narzędzi do pracy w darknecie, chciałbym, żebyś "
+        "weszła na GitHuba, przejrzała repozytoria z zestawami narzędzi pod "
+        "darknet i do OSINT-u. Najpierw przedstaw mi listę."
+    )
+
+    contract = TaskContract.from_prompt(prompt)
+
+    assert TaskContract.prefers_tor(prompt) is False
+    assert contract.requires_browser_navigation is True
+    assert contract.requires_web_discovery is True
+    assert contract.requires_file_read is False
+    assert contract.required_tools == ()
+
+
+def test_github_source_wins_over_darknet_tool_topic_in_english_request() -> None:
+    prompt = (
+        "Search GitHub for tools for searching the dark web. Show me what "
+        "you choose before adopting anything."
+    )
+
+    contract = TaskContract.from_prompt(prompt)
+
+    assert TaskContract.prefers_tor(prompt) is False
+    assert contract.requires_browser_navigation is True
+    assert contract.requires_web_discovery is True
+    assert contract.required_tools == ()
+
+
+def test_direct_darknet_source_wins_over_github_repository_topic() -> None:
+    prompt = "Przeszukaj darknet pod kątem repozytoriów GitHub do OSINT-u."
+
+    contract = TaskContract.from_prompt(prompt)
+
+    assert TaskContract.prefers_tor(prompt) is True
+    assert contract.required_tools == ("full_tor_search",)
+    assert contract.requires_browser_navigation is False
+
+
+def test_explicit_tor_transport_wins_for_github_destination() -> None:
+    prompt = "Używając Tora, przeszukaj GitHuba pod kątem narzędzi OSINT."
+
+    assert TaskContract.prefers_tor(prompt) is True
+
+
 def test_output_report_file_is_not_misread_as_an_input_file() -> None:
     contract = TaskContract.from_prompt(
         "Inspect the forum, verify the findings, and save them to report.md."
@@ -758,6 +945,30 @@ def test_explicit_shop_address_remains_a_required_public_fact() -> None:
     )
 
     contract = TaskContract.from_prompt(prompt)
+
+    assert contract.required_public_fields == ("address",)
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Znajdź nazwy i adresy działających marketów w darknecie.",
+        "Find the names and addresses of active services on the dark web.",
+        "List the website addresses and domains of the online services.",
+    ],
+)
+def test_online_service_addresses_are_not_postal_public_facts(
+    prompt: str,
+) -> None:
+    contract = TaskContract.from_prompt(prompt)
+
+    assert "address" not in contract.required_public_fields
+
+
+def test_explicit_physical_address_wins_over_online_context() -> None:
+    contract = TaskContract.from_prompt(
+        "Find the physical street address of the online shop's headquarters."
+    )
 
     assert contract.required_public_fields == ("address",)
 
@@ -975,8 +1186,46 @@ def test_semantic_browser_contract_enables_discovery_without_url() -> None:
     direct = intent.to_contract("Inspect https://example.com/docs")
 
     assert discovery.requires_web_discovery is True
-    assert discovery.requires_distinct_detail_page is True
+    assert discovery.requires_browser_snapshot is False
+    assert discovery.requires_distinct_detail_page is False
     assert direct.requires_web_discovery is False
+    assert direct.requires_browser_snapshot is True
+
+
+def test_semantic_current_rate_lookup_does_not_become_deep_research() -> None:
+    prompt = (
+        "Cześć V, jak ci mija wieczór? Słuchajcie, możesz dla mnie "
+        "sprawdzić, jaki jest aktualny kurs Monero do złotówki?"
+    )
+    intent = SemanticIntent(
+        action_requested=True,
+        capabilities=("browser",),
+        requires_report=True,
+        distinct_detail_page=False,
+        web_query="actual Monero to zloty exchange rate",
+    )
+
+    contract = intent.to_contract(prompt)
+
+    assert contract.requires_browser_navigation is True
+    assert contract.requires_web_discovery is True
+    assert contract.requires_browser_snapshot is False
+    assert contract.requires_distinct_detail_page is False
+    assert contract.minimum_detail_sources == 0
+
+
+def test_semantic_deep_research_still_requires_detail_observation() -> None:
+    intent = SemanticIntent(
+        action_requested=True,
+        capabilities=("browser",),
+        requires_report=True,
+        distinct_detail_page=True,
+    )
+
+    contract = intent.to_contract("Compare current offers and inspect the details.")
+
+    assert contract.requires_browser_snapshot is True
+    assert contract.requires_distinct_detail_page is True
 
 
 def test_discovery_report_rejects_second_search_as_detail_page() -> None:
@@ -3328,6 +3577,75 @@ def test_task_contract_accepts_named_online_result_present_in_source() -> None:
         calls,
         request="Find an alternative to FireCrawler online.",
     ) == []
+
+
+def test_task_contract_rejects_mangled_github_repository_identifiers() -> None:
+    request = (
+        "Find useful GitHub tools for darknet OSINT and cybersecurity, then "
+        "present the candidates for my approval."
+    )
+    contract = TaskContract.from_prompt(request)
+    calls = [
+        {
+            "tool": "web_search",
+            "arguments": {"query": "darknet OSINT cybersecurity GitHub"},
+            "status": "succeeded",
+            "result_excerpt": (
+                "https://github.com/thamore/master-osintv4-\n"
+                "https://github.com/apurvsinghgautam/robin"
+            ),
+        },
+        {
+            "tool": "browser_navigate",
+            "arguments": {"url": "https://github.com/thamore/master-osintv4-"},
+            "status": "succeeded",
+            "result_excerpt": "- Page URL: https://github.com/thamore/master-osintv4-",
+        },
+        {
+            "tool": "browser_navigate",
+            "arguments": {"url": "https://github.com/apurvsinghgautam/robin"},
+            "status": "succeeded",
+            "result_excerpt": "- Page URL: https://github.com/apurvsinghgautam/robin",
+        },
+    ]
+    answer = (
+        "Here are the candidates:\n\n"
+        "- **GitHub - thamore/master-osint**: OSINT collection.\n"
+        "- **GitHub - apurvsinghgautum/robin**: Dark-web OSINT tool."
+    )
+
+    assert contract.answer_issues(answer, calls, request=request) == [
+        "answer:ungrounded_repository_identifiers="
+        "apurvsinghgautum/robin|thamore/master-osint"
+    ]
+
+
+def test_task_contract_accepts_exact_observed_github_repository_identifiers() -> None:
+    request = (
+        "Find useful GitHub tools for darknet OSINT and cybersecurity, then "
+        "present the candidates for my approval."
+    )
+    contract = TaskContract.from_prompt(request)
+    calls = [
+        {
+            "tool": "browser_snapshot",
+            "arguments": {},
+            "status": "succeeded",
+            "result_excerpt": (
+                "- Page URL: https://github.com/thamore/master-osintv4-\n"
+                "master-osintv4 contains darknet OSINT modules and security links.\n"
+                "- Page URL: https://github.com/apurvsinghgautam/robin\n"
+                "Robin is a dark-web OSINT research tool."
+            ),
+        }
+    ]
+    answer = (
+        "Two source-backed candidates:\n\n"
+        "- **GitHub - thamore/master-osintv4-**: darknet OSINT modules.\n"
+        "- **GitHub - apurvsinghgautam/robin**: dark-web OSINT research tool."
+    )
+
+    assert contract.answer_issues(answer, calls, request=request) == []
 
 
 def test_task_contract_accepts_source_backed_based_adjective() -> None:

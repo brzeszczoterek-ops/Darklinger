@@ -8,6 +8,8 @@ from v_core.agent import Agent
     "I'm testing now.",
     "The tests are running.",
     "Results in thirty seconds.",
+    "Evening's smooth. I just tested a darknet market—results in 25 seconds. Want to see it?",
+    "Właśnie przetestowałam narzędzie. Chcesz zobaczyć wynik?",
 ])
 def test_chat_rejects_unbacked_live_test_status(answer):
     assert Agent._claims_active_chat_work(answer)

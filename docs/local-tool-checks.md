@@ -12,6 +12,10 @@
 - Each executed check has a time limit and a runtime trace entry. Success is
   checked against fixture data, not the model's assertion of success.
 - Other tools are reported as `not_tested`, with no live/network fallback.
+- `web_search` and `web_read` have deterministic browser-snapshot fixtures.
+  They verify result parsing, remembered search evidence, rejection of an unseen
+  substitute URL, and reading the selected result. They do not contact DNS or
+  the public Internet and therefore report `live_network: false`.
 - An explicit tool name narrows the selection. Recognized read-only requests
   skip all four mutating providers. Temporary fixture preparation itself writes
   files, even for read-only provider checks.
@@ -109,9 +113,20 @@ Five real network cases passed on 2026-09-08:
 4. `web_search` returned six URLs including an official IANA page.
 5. `web_read` opened an IANA URL found by that search and returned relevant content.
 
+The fixed-target probe was repeated on 2026-09-16 after integrating the same
+search/read evidence boundary with automatic functional checks. All five live
+cases passed again. The complete suites then passed **1035 Full / 962 Public**.
+
 Offline regression tests additionally reject missing content, empty search
 results, false success for unavailable pages, and timeouts; cancellation is
 not swallowed. Offline browser fixtures do not count as live network evidence.
+
+The same evidence boundary now applies to automatic functional self-tests:
+`web_search` may establish a candidate URL, while `web_read` must use that
+recorded candidate and retrieve page content before PALADYN can present it as
+observed. Passing the deterministic fixtures proves only this parser and
+grounding path. Current reachability still requires the separate opt-in live
+probe.
 
 These checks do not cover accounts, authentication, form submissions, Tor,
 generated tools, or scanning. The automatic `tool_self_test` path remains local;

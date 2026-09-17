@@ -45,6 +45,18 @@ class GeneratedToolContract:
     specification: str = ""
     archetype: str = ""
 
+    def source_examples(self) -> dict[str, Any]:
+        """Project code-writing inputs without copying execution/provenance data.
+
+        Keep every independent oracle, but send each only once. The complete
+        immutable contract (including final invocation and grounding quotes)
+        remains runtime-owned and is still used for validation and persistence.
+        """
+        return {"tests": [
+            {"arguments": deepcopy(case.arguments), "expected": deepcopy(case.expected)}
+            for case in self.tests
+        ]}
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "tests": [case.to_dict() for case in self.tests],
@@ -450,3 +462,30 @@ def explicit_generated_tool_contract(prompt: str) -> GeneratedToolContract | Non
     if not isinstance(final, dict) or tuple(sorted(final)) != input_keys:
         raise GeneratedToolContractError("final invocation fields differ from test inputs")
     return GeneratedToolContract(tuple(tests), deepcopy(final), quote, "owner_structured_contract")
+
+
+def source_generation_objective(prompt: str, contract: GeneratedToolContract) -> str:
+    """Elide only a verified duplicate JSON contract, never surrounding prose.
+
+    Natural-language objectives and unfamiliar payloads are retained verbatim.
+    This is structural JSON handling, not language-specific intent recognition.
+    """
+    try:
+        if explicit_generated_tool_contract(prompt) != contract:
+            return prompt
+    except GeneratedToolContractError:
+        return prompt
+    marker = re.search(r"(?<![\w.])tool_contract\s*=\s*", prompt)
+    if marker is None:
+        return prompt
+    value, end = json.JSONDecoder().raw_decode(prompt[marker.end():])
+    # Unknown extension fields could carry semantics we do not project.
+    if set(value) != {"tests", "final_arguments"} or any(
+        set(case) != {"arguments", "expected"} for case in value["tests"]
+    ):
+        return prompt
+    return (
+        prompt[:marker.start()]
+        + "[Frozen examples supplied separately; final invocation is runtime-owned.]"
+        + prompt[marker.end() + end:]
+    )

@@ -38,33 +38,83 @@ async def test_local_tools(tools, definitions, trace=None, *, timeout=10, prompt
     results = []
     root = getattr(tools, "workspace", None)
     direct = getattr(tools, "_call_direct", None)
-    if root is None or not callable(direct):
-        return _report([{"tool": name, "status": "not_tested",
-                         "reason": "Local fixture provider unavailable."} for name in names])
-    root = Path(root).resolve()
-    if not root.is_dir():
-        return _report([{"tool": name, "status": "not_tested",
-                         "reason": "Configured workspace unavailable."} for name in names])
+    root = Path(root).resolve() if root is not None else None
     for name in names:
         if name in _WRITE_TOOLS and not allow_write:
             results.append({"tool": name, "status": "not_tested",
                             "reason": "Owner requested read-only checks; write provider not called."})
             continue
-        if name not in _CASES:
-            results.append({"tool": name, "status": "not_tested",
-                            "reason": "No approved local functional fixture; no live fallback."})
-            continue
         try:
             learning = getattr(tools, "learning", None)
             extension = getattr(tools, "edition_extension", None)
-            if ((learning is not None and name in learning.active_tool_names())
-                    or (extension is not None and extension.handles_tool(name))):
-                results.append({"tool": name, "status": "not_tested",
-                                "reason": "Provider overrides built-in fixture tool; execution skipped."})
-                continue
+            generated_override = (
+                learning is not None and name in learning.active_tool_names()
+            )
+            edition_override = (
+                extension is not None and extension.handles_tool(name)
+            )
         except Exception as error:
             results.append({"tool": name, "status": "not_tested",
                             "reason": "Provider identity check failed: " + type(error).__name__})
+            continue
+        if generated_override:
+            results.append({"tool": name, "status": "not_tested",
+                            "reason": "Provider overrides built-in fixture tool; execution skipped."})
+            continue
+        core_self_test = getattr(tools, "self_test_tool", None)
+        if callable(core_self_test):
+            try:
+                fixture_result = await asyncio.wait_for(core_self_test(name), timeout)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                results.append({
+                    "tool": name,
+                    "status": "failed",
+                    "reason": "Core functional fixture failed: " + type(error).__name__,
+                    "evidence_level": "deterministic_offline_fixture",
+                    "live_network": False,
+                })
+                continue
+            if isinstance(fixture_result, dict):
+                results.append(fixture_result)
+                continue
+        if edition_override:
+            self_test = getattr(extension, "self_test_tool", None)
+            if not callable(self_test):
+                results.append({"tool": name, "status": "not_tested",
+                                "reason": "No approved edition fixture; no live fallback."})
+                continue
+            try:
+                fixture_result = await asyncio.wait_for(self_test(name), timeout)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                results.append({
+                    "tool": name,
+                    "status": "failed",
+                    "reason": "Edition functional fixture failed: " + type(error).__name__,
+                    "evidence_level": "deterministic_offline_fixture",
+                    "live_network": False,
+                })
+                continue
+            if isinstance(fixture_result, dict):
+                results.append(fixture_result)
+                continue
+            results.append({"tool": name, "status": "not_tested",
+                            "reason": "No approved edition fixture; no live fallback."})
+            continue
+        if root is None or not callable(direct):
+            results.append({"tool": name, "status": "not_tested",
+                            "reason": "Local fixture provider unavailable."})
+            continue
+        if not root.is_dir():
+            results.append({"tool": name, "status": "not_tested",
+                            "reason": "Configured workspace unavailable."})
+            continue
+        if name not in _CASES:
+            results.append({"tool": name, "status": "not_tested",
+                            "reason": "No approved local functional fixture; no live fallback."})
             continue
         # Each tool gets separate disposable data: edits/moves cannot pollute
         # later checks. This is fixture isolation, not an OS sandbox.
@@ -214,9 +264,10 @@ def _listing_matches(raw, expected_name):
 def _report(results):
     counts = {status: sum(row["status"] == status for row in results)
               for status in ("passed", "failed", "not_tested")}
-    lines = ["Boss, these are bounded local functional checks, not a certification of every tool.",
-             "Temporary workspace fixtures only; not an OS sandbox. No network tests, repairs or live fallback."]
+    lines = ["Boss, these are bounded functional checks, not a certification of every tool.",
+             "Approved deterministic fixtures only; not an OS sandbox. Network-capable tools may be exercised without live network access. No repairs or live fallback."]
     lines.extend(f"- {row['tool']}: {row['status']} — {row['reason']}" for row in results)
     lines.append("A passing fixture confirms only that tested case. Untested tools remain unverified.")
-    return "\n\n".join(lines), {"scope": "local_functional_fixtures", "results": results,
-                                     "counts": counts, "functional_tests": counts["passed"] + counts["failed"]}
+    return "\n\n".join(lines), {"scope": "bounded_functional_fixtures", "results": results,
+                                     "counts": counts, "functional_tests": counts["passed"] + counts["failed"],
+                                     "live_network_tests": sum(bool(row.get("live_network")) for row in results)}

@@ -65,6 +65,43 @@ def test_tool_request_accepts_structured_json() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("error", "details", "expected"),
+    [
+        (
+            'MCPToolExecutionError: Browser "firefox" is not installed; '
+            "run install-browser firefox",
+            {"stage": "provider_execution"},
+            True,
+        ),
+        (
+            "ToolDispatchUnavailableError: all providers are unavailable",
+            {
+                "stage": "dispatch",
+                "reason": "matching_providers_circuit_open",
+            },
+            True,
+        ),
+        (
+            "ToolDispatchUnavailableError: no provider is registered",
+            {"stage": "dispatch", "reason": "no_eligible_provider"},
+            True,
+        ),
+        (
+            "MCPToolExecutionError: DNS resolution failed",
+            {"stage": "provider_execution"},
+            False,
+        ),
+    ],
+)
+def test_terminal_tool_provider_error_classification(
+    error: str,
+    details: dict,
+    expected: bool,
+) -> None:
+    assert Agent._is_terminal_tool_provider_error(error, details) is expected
+
+
 def test_tool_request_accepts_exact_hermes_function_call_envelope() -> None:
     assert Agent._parse_tool_request(
         '{"name":"read_file","arguments":{"path":"README.md"}}'
@@ -1144,6 +1181,149 @@ def test_long_mixed_check_in_and_idea_request_skips_semantic_router() -> None:
     assert Agent._is_light_conversation(prompt)
 
 
+@pytest.mark.asyncio
+async def test_short_assent_stays_attached_to_latest_visible_question(
+    tmp_path: Path,
+) -> None:
+    session = Session()
+    session.add(
+        "task",
+        {
+            "task": "Cześć V, jak tam wieczór?",
+            "result": (
+                "Evening's smooth. I just tested a darknet market—results "
+                "in 25 seconds. Want to see it?"
+            ),
+        },
+    )
+
+    class ToolsStub:
+        def begin_interaction(self, interaction_id: str, prompt: str) -> None:
+            return None
+
+    class CapabilitiesStub:
+        def dispatch(self, prompt: str) -> str:
+            raise AssertionError("a short contextual reply must stay in dialogue")
+
+    class IntentRouterStub:
+        async def classify(self, *args, **kwargs):
+            raise AssertionError("dialogue assent must not enter task classification")
+
+    class LLMStub:
+        async def ask(self, *, messages: list[dict], **kwargs) -> str:
+            raise AssertionError("a false offer must be rejected without generation")
+
+    class MemoryStub:
+        def __init__(self) -> None:
+            self.session = session
+            self.relationship_state = RelationshipState()
+
+        async def process(self, *args, **kwargs) -> None:
+            return None
+
+    agent = object.__new__(Agent)
+    agent.memory = MemoryStub()
+    agent.llm = LLMStub()
+    agent.tools = ToolsStub()
+    agent.capabilities = CapabilitiesStub()
+    agent.intent_router = IntentRouterStub()
+    agent.persona = PersonaRuntime(identity=IdentityKernel(), voice=VoiceProfile())
+    agent._memory_tasks = set()
+    agent._agent_trace_root = tmp_path / "traces"
+    agent._last_execution_context = None
+
+    answer = await agent._run_turn("Oczywiście, że tak.")
+
+    assert "there are no results" in answer.casefold()
+    assert "hallucinated status" in answer.casefold()
+    assert session.messages(limit=1)[-2]["content"] == "Oczywiście, że tak."
+    journal = next((tmp_path / "traces" / "journal").glob("*.jsonl"))
+    assert "conversation_false_offer_rejected" in journal.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_short_explicit_action_after_question_still_enters_executor() -> None:
+    session = Session()
+    session.add(
+        "task",
+        {"task": "Show me the plan.", "result": "Want me to run the tests?"},
+    )
+    agent = object.__new__(Agent)
+    agent.memory = SimpleNamespace(session=session)
+
+    assert not agent._is_short_dialogue_reply("Tak, uruchom testy.")
+
+
+def test_short_reply_does_not_resurrect_question_from_previous_app_session(
+    tmp_path: Path,
+) -> None:
+    stored = Session(tmp_path / "dialogue")
+    stored.add(
+        "task",
+        {"task": "Old turn", "result": "Want me to run an old task?"},
+    )
+    restarted = Session(tmp_path / "dialogue")
+    agent = object.__new__(Agent)
+    agent.memory = SimpleNamespace(session=restarted)
+
+    assert not agent._is_short_dialogue_reply("Tak.")
+
+
+@pytest.mark.asyncio
+async def test_light_chat_rejects_exact_past_tense_execution_hallucination(
+    tmp_path: Path,
+) -> None:
+    class ToolsStub:
+        def begin_interaction(self, interaction_id: str, prompt: str) -> None:
+            return None
+
+    class LLMStub:
+        async def ask(self, **kwargs) -> str:
+            return (
+                "Evening's smooth. I just tested a darknet market—results "
+                "in 25 seconds. Want to see it?"
+            )
+
+    class MemoryStub:
+        def __init__(self) -> None:
+            self.session = Session()
+            self.relationship_state = RelationshipState()
+
+        async def process(self, *args, **kwargs) -> None:
+            return None
+
+    agent = object.__new__(Agent)
+    agent.memory = MemoryStub()
+    agent.llm = LLMStub()
+    agent.tools = ToolsStub()
+    agent.persona = PersonaRuntime(identity=IdentityKernel(), voice=VoiceProfile())
+    agent._memory_tasks = set()
+    agent._agent_trace_root = tmp_path / "traces"
+
+    answer = await agent._run_light_chat(
+        "Cześć V, jak tam wieczór? Co u Ciebie słychać?",
+        None,
+        trace=agent._start_agent_trace("Cześć V, jak tam wieczór?"),
+    )
+
+    assert "No tests were started" in answer
+    assert "just tested" not in answer
+    journal = next((tmp_path / "traces" / "journal").glob("*.jsonl"))
+    assert "conversation_execution_claim_rejected" in journal.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_mixed_check_in_and_inflected_action_does_not_enter_light_chat() -> None:
+    prompt = (
+        "Cześć V, jak się dzisiaj masz? Chciałbym, żebyś weszła w darknet "
+        "i znalazła publiczne fora poświęcone ochronie prywatności."
+    )
+
+    assert not Agent._is_light_conversation(prompt)
+
+
 def test_light_chat_strips_compact_offer_and_false_done_claim() -> None:
     answer = (
         "PALADYN's login is old tech. Face recognition replaces it. "
@@ -2109,7 +2289,7 @@ def test_owner_progress_report_merges_rich_ledger_after_bounded_rollover() -> No
     assert report.count(
         "Source: https://thunderbit.com/pl/blog/open-source-firecrawl-alternatives"
     ) == 1
-    assert "Verified candidates: Scrapy; Apache Nutch" in report
+    assert "Observed candidate labels: Scrapy; Apache Nutch" in report
     assert "Continue the original objective" not in report
 
 
@@ -2159,6 +2339,111 @@ def test_owner_progress_report_unwraps_truncated_web_read_json() -> None:
     assert "Source: https://raw.githubusercontent.com/example/project/main/README.md" in report
     assert "generic [" not in report
     assert '"requested_url"' not in report
+
+
+def test_owner_progress_report_is_a_reusable_recovery_checkpoint() -> None:
+    github_repo = "https://github.com/example/onion-audit"
+    guide = "https://security.example/darknet-tools"
+    opened_only = "https://catalogue.example/osint-list"
+    report = Agent._owner_progress_report(
+        None,
+        [
+            {
+                "tool": "web_search",
+                "status": "succeeded",
+                "result_excerpt": json.dumps(
+                    {
+                        "engine": "duckduckgo",
+                        "query": "darknet tools github",
+                        "results": [
+                            {"title": "Onion Audit", "url": github_repo},
+                            {"title": "Darknet tools guide", "url": guide},
+                            {"title": "OSINT list", "url": opened_only},
+                        ],
+                    }
+                ),
+            },
+            {
+                "tool": "browser_navigate",
+                "status": "succeeded",
+                "arguments": {"url": guide},
+                "result_excerpt": f"- Page URL: {guide}",
+            },
+            {
+                "tool": "browser_snapshot",
+                "status": "succeeded",
+                "result_excerpt": (
+                    f"- Page URL: {guide}\n"
+                    "- Page Title: Darknet tools guide\n"
+                    '- heading "OnionScan" [level=2]'
+                ),
+            },
+            {
+                "tool": "browser_navigate",
+                "status": "succeeded",
+                "arguments": {"url": opened_only},
+                "result_excerpt": f"- Page URL: {opened_only}",
+            },
+        ],
+        [],
+        objective=(
+            "Przeszukaj GitHuba pod kątem narzędzi darknet, oceń repozytoria "
+            "and present candidates for approval."
+        ),
+        failed_calls=[
+            {
+                "tool": "browser_snapshot",
+                "status": "failed",
+                "error": "page closed before capture",
+            }
+        ],
+        stop_reason="the final model report failed grounding validation",
+    )
+
+    assert "Recovery checkpoint:" in report
+    assert "Przeszukaj GitHuba pod kątem narzędzi darknet" in report
+    assert "Stop reason: the final model report failed grounding validation" in report
+    assert f"Inspected (page content captured): {guide}" in report
+    assert f"Opened only (content not captured): {opened_only}" in report
+    assert f"Discovered only (not opened or evaluated): {github_repo}" in report
+    assert "no GitHub page content was inspected" in report
+    assert "Search GitHub directly, open concrete repository pages" in report
+    assert "do not repeat the searches" in report
+    assert "page closed before capture" in report
+
+
+def test_verified_fallback_report_preserves_objective_and_resume_point() -> None:
+    report = Agent._owner_verified_final_report(
+        None,
+        [
+            {
+                "tool": "web_search",
+                "status": "succeeded",
+                "result_excerpt": json.dumps(
+                    {
+                        "engine": "duckduckgo",
+                        "query": "darknet tools",
+                        "results": [
+                            {
+                                "title": "Candidate repository",
+                                "url": "https://github.com/example/candidate",
+                            }
+                        ],
+                    }
+                ),
+            }
+        ],
+        TaskContract(requires_evidence_report=True),
+        objective="Inspect GitHub repositories and recommend tools to adopt.",
+        stop_reason="two final rewrites were rejected",
+    )
+
+    assert "Recovery checkpoint:" in report
+    assert "Objective: Inspect GitHub repositories" in report
+    assert "two final rewrites were rejected" in report
+    assert "Discovered only (not opened or evaluated)" in report
+    assert "no GitHub page content was inspected" in report
+    assert "Resume from here:" in report
 
 
 @pytest.mark.asyncio
@@ -2519,6 +2804,135 @@ async def test_identical_tool_call_loop_is_rejected_and_paused_early(
 
 
 @pytest.mark.asyncio
+async def test_successful_but_nonprogressing_tool_calls_are_bounded(
+    tmp_path: Path,
+) -> None:
+    urls = [f"https://example.test/about-{index}" for index in range(1, 8)]
+
+    class ToolsStub:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        async def openai_tool_definitions(self) -> list[dict]:
+            return [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"query": {"type": "string"}},
+                            "required": ["query"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "web_read",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"url": {"type": "string"}},
+                            "required": ["url"],
+                        },
+                    },
+                },
+            ]
+
+        async def call(self, tool: str, arguments: dict) -> str:
+            self.calls.append((tool, arguments))
+            if tool == "web_search":
+                return json.dumps(
+                    {
+                        "query": arguments["query"],
+                        "results": [
+                            {"title": f"Example Labs {index}", "url": url}
+                            for index, url in enumerate(urls, start=1)
+                        ],
+                    }
+                )
+            index = urls.index(arguments["url"]) + 1
+            return json.dumps(
+                {
+                    "url": arguments["url"],
+                    "content": (
+                        f"Example Labs information page {index}. This page "
+                        "contains background material but no postal location."
+                    ),
+                }
+            )
+
+    class LLMStub:
+        config = SimpleNamespace(context=8_192)
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def respond(self, **kwargs) -> LLMResponse:
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResponse(
+                    tool_calls=[
+                        LLMToolCall(
+                            "search",
+                            "web_search",
+                            {"query": "Example Labs physical address"},
+                        )
+                    ]
+                )
+            return LLMResponse(
+                tool_calls=[
+                    LLMToolCall(
+                        f"read-{self.calls}",
+                        "web_read",
+                        {"url": urls[self.calls - 2]},
+                    )
+                ]
+            )
+
+    class MemoryStub:
+        def __init__(self) -> None:
+            self.session = Session()
+
+        async def process(self, *args, **kwargs) -> None:
+            return None
+
+    tools = ToolsStub()
+    agent = object.__new__(Agent)
+    agent.llm = LLMStub()
+    agent.tools = tools
+    agent.memory = MemoryStub()
+    agent.persona = PersonaRuntime(identity=IdentityKernel(), voice=VoiceProfile())
+    agent._agent_trace_root = tmp_path / "interactive"
+    agent._last_execution_context = None
+    agent._build_system_prompt = lambda prompt, agent_mode: "system"
+    agent.MAX_AGENT_STEPS = 16
+
+    answer = await agent._run_agent_loop(
+        "Search the web for the physical address of Example Labs and report "
+        "a verified result."
+    )
+    await asyncio.gather(*agent._memory_tasks)
+
+    assert "mechanically successful" in answer
+    assert "did not reduce" in answer
+    assert len(tools.calls) < agent.MAX_AGENT_STEPS
+    checkpoint = json.loads(
+        next((agent._agent_trace_root / "checkpoints").glob("*.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert checkpoint["status"] == "blocked"
+    journal = (
+        agent._agent_trace_root
+        / "journal"
+        / f"{checkpoint['task_id']}.jsonl"
+    ).read_text(encoding="utf-8")
+    assert "contract_progress_warning" in journal
+    assert "contract_progress_stalled" in journal
+
+
+@pytest.mark.asyncio
 async def test_direct_url_failure_prevents_alternating_guessed_domains(
     tmp_path: Path,
 ) -> None:
@@ -2724,6 +3138,37 @@ def test_discovery_query_skips_period_terminated_voice_greeting() -> None:
     assert "kapcza" in query
     assert "Cześć V" not in query
     assert "Jeżeli" not in query
+
+
+def test_discovery_query_skips_multiple_voice_preamble_sentences() -> None:
+    prompt = (
+        "Cześć V. Jak tam wieczorek? Słuchaj, chciałbym żebyś zebrała mi "
+        "informacje na temat europejskich raportów o marketach darknetowych. "
+        "Szczególnie interesują mnie raporty organów ścigania."
+    )
+
+    query = Agent._discovery_search_query(prompt)
+
+    assert "marketach darknetowych" in query
+    assert "Jak tam wieczorek" not in query
+    assert "Cześć V" not in query
+
+
+def test_discovery_query_keeps_scope_after_github_source_sentence() -> None:
+    prompt = (
+        "Ty, czemu się zapętlasz? Jeszcze raz tłumaczę, o co mi chodzi. "
+        "Znajdź przydatne narzędzia i umiejętności na GitHubie. "
+        "Narzędzia i umiejętności odnośnie darknetu, czyli OSINT, cyber "
+        "security i inwigilacja. Najpierw podaj mi listę do zatwierdzenia."
+    )
+
+    query = Agent._discovery_search_query(prompt).casefold()
+
+    assert "github" in query
+    assert "darknet" in query
+    assert "osint" in query
+    assert "cyber" in query
+    assert "zatwierdzenia" not in query
 
 
 def test_discovery_query_skips_unnamed_short_greeting_before_long_request() -> None:
@@ -3269,6 +3714,48 @@ def test_semantic_web_query_overrides_model_search_query() -> None:
     assert repaired["url"] == (
         "https://duckduckgo.com/?q=alternative+%C3%A0+Firecrawler"
     )
+
+
+def test_grounded_follow_up_search_keeps_concise_multilingual_scope() -> None:
+    prompt = (
+        "Znajdź przydatne narzędzia i umiejętności na GitHubie. "
+        "Narzędzia i umiejętności odnośnie darknetu szeroko pojętego, "
+        "czyli OSINT, cyber security, inwigilacja, cokolwiek."
+    )
+    focused_query = Agent._discovery_search_query(prompt)
+    requested_query = "darknet OSINT GitHub repositories"
+    contract = TaskContract.from_prompt(prompt)
+    successful = [
+        {
+            "tool": "web_search",
+            "status": "succeeded",
+            "arguments": {
+                "query": "darknet OSINT cyber security GitHub repositories"
+            },
+            "result_excerpt": json.dumps(
+                {
+                    "results": [
+                        {
+                            "title": "GitHub - owner/first-darknet-tool",
+                            "url": "https://github.com/owner/first-darknet-tool",
+                        }
+                    ]
+                }
+            ),
+        }
+    ]
+
+    repaired = Agent._repair_web_discovery_navigation(
+        prompt,
+        "web_search",
+        {"query": requested_query, "max_results": 5},
+        contract,
+        successful,
+        [],
+        preferred_query=focused_query,
+    )
+
+    assert repaired["query"] == requested_query
 
 
 def test_model_copied_detail_url_is_repaired_from_search_evidence() -> None:
@@ -5554,6 +6041,64 @@ def test_runtime_does_not_promote_topic_or_auction_listing_to_detail() -> None:
     assert request is None
 
 
+def test_github_repository_root_is_detail_but_auxiliary_tabs_are_not() -> None:
+    assert Agent._is_strong_detail_url(
+        "https://github.com/Cybersight-Security/OSINT-Toolkit"
+    )
+    assert not Agent._is_strong_detail_url("https://github.com/topics/osint-tool")
+    assert not Agent._is_strong_detail_url(
+        "https://github.com/smicallef/spiderfoot/issues"
+    )
+    assert not Agent._is_strong_detail_url(
+        "https://github.com/smicallef/spiderfoot/pulls"
+    )
+
+
+def test_runtime_replaces_github_topic_page_with_observed_repository() -> None:
+    prompt = "Find useful GitHub tools for darknet OSINT and cybersecurity."
+    contract = TaskContract(
+        requires_browser_navigation=True,
+        requires_browser_snapshot=True,
+        requires_web_discovery=True,
+        requires_distinct_detail_page=True,
+    )
+    repository = "https://github.com/Cybersight-Security/OSINT-Toolkit"
+    calls = [
+        {
+            "tool": "web_search",
+            "status": "succeeded",
+            "result_excerpt": json.dumps(
+                {
+                    "results": [
+                        {
+                            "rank": 1,
+                            "title": "osint-tool GitHub Topics",
+                            "url": "https://github.com/topics/osint-tool",
+                        },
+                        {
+                            "rank": 2,
+                            "title": "Cybersight Security OSINT Toolkit",
+                            "url": repository,
+                        },
+                    ]
+                }
+            ),
+        }
+    ]
+
+    repaired = Agent._repair_web_discovery_navigation(
+        prompt,
+        "browser_navigate",
+        {"url": "https://github.com/topics/osint-tool"},
+        contract,
+        calls,
+        [],
+        preferred_query="darknet OSINT cybersecurity GitHub tools",
+    )
+
+    assert repaired == {"url": repository}
+
+
 def test_runtime_observes_each_owner_url_before_finalization() -> None:
     prompt = (
         "Compare www.invicti.com/product and www.acunetix.com/product."
@@ -6044,6 +6589,7 @@ async def test_generic_find_information_action_uses_semantic_browser_route(
                 action_requested=True,
                 capabilities=("browser",),
                 requires_report=True,
+                distinct_detail_page=True,
             )
 
     class LLMStub:
@@ -6128,6 +6674,126 @@ async def test_generic_find_information_action_uses_semantic_browser_route(
         "browser_snapshot",
     ]
     assert answer == "I found one verified public result, Boss."
+
+
+@pytest.mark.asyncio
+async def test_missing_browser_dependency_stops_web_lookup_after_one_call(
+    tmp_path: Path,
+) -> None:
+    prompt = (
+        "Cześć V, jak ci mija wieczór? Słuchajcie, możesz dla mnie "
+        "sprawdzić, jaki jest aktualny kurs Monero do złotówki?"
+    )
+    error = (
+        'MCPToolExecutionError: Browser "firefox" is not installed; expected '
+        "executable at /tmp/ms-playwright/firefox-1544/firefox/firefox. "
+        "Run npx @playwright/mcp install-browser firefox to install."
+    )
+
+    class ToolsStub:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        async def openai_tool_definitions(self) -> list[dict]:
+            return [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "description": "Search the public web.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"query": {"type": "string"}},
+                            "required": ["query"],
+                        },
+                    },
+                }
+            ]
+
+        async def call_with_recovery(self, tool: str, arguments: dict):
+            self.calls.append((tool, arguments))
+            return SimpleNamespace(
+                result=f"Tool execution failed: {error}",
+                provider_tool=tool,
+                capabilities=("web_search",),
+                attempts=(
+                    {
+                        "provider": tool,
+                        "status": "failed",
+                        "error": error,
+                    },
+                ),
+                recovery_ticket=None,
+                failure_details={
+                    "stage": "provider_execution",
+                    "execution_attempted": True,
+                    "provider": tool,
+                    "exception_type": "MCPToolExecutionError",
+                },
+                error=error,
+            )
+
+    class IntentRouterStub:
+        async def classify(self, prompt: str, **kwargs) -> SemanticIntent:
+            return SemanticIntent(
+                action_requested=True,
+                capabilities=("browser",),
+                requires_report=True,
+                distinct_detail_page=False,
+                web_query="actual Monero to zloty exchange rate",
+            )
+
+    class LLMStub:
+        config = SimpleNamespace(context=8_192)
+
+        def __init__(self) -> None:
+            self.turns = 0
+
+        async def respond(self, **kwargs) -> LLMResponse:
+            self.turns += 1
+            assert self.turns == 1
+            assert {
+                item["function"]["name"] for item in (kwargs.get("tools") or [])
+            } == {"web_search"}
+            return LLMResponse(
+                tool_calls=[
+                    LLMToolCall(
+                        "search",
+                        "web_search",
+                        {"query": "actual Monero to zloty exchange rate"},
+                    )
+                ]
+            )
+
+    class MemoryStub:
+        def __init__(self) -> None:
+            self.session = Session()
+
+        async def process(self, *args, **kwargs) -> None:
+            return None
+
+    tools = ToolsStub()
+    llm = LLMStub()
+    agent = object.__new__(Agent)
+    agent.llm = llm
+    agent.intent_router = IntentRouterStub()
+    agent.tools = tools
+    agent.memory = MemoryStub()
+    agent.persona = PersonaRuntime(identity=IdentityKernel(), voice=VoiceProfile())
+    agent.context_window = ContextWindowManager()
+    agent._agent_trace_root = tmp_path
+    agent._last_execution_context = None
+    agent._memory_tasks = set()
+    agent._build_system_prompt = lambda prompt, agent_mode: "system"
+
+    answer = await agent._run_agent_loop(prompt)
+    await asyncio.gather(*agent._memory_tasks)
+
+    assert len(tools.calls) == 1
+    assert llm.turns == 1
+    assert "firefox" in answer
+    assert "Nothing is running in the background" in answer
+    assert agent._last_execution_context["status"] == "blocked"
 
 
 @pytest.mark.asyncio
@@ -6718,6 +7384,83 @@ def test_actionable_request_is_not_rejected_only_for_reference_flag() -> None:
     ) is False
 
 
+def test_repeated_complete_web_request_does_not_require_dialogue_history() -> None:
+    intent = SemanticIntent(
+        message_clear=True,
+        action_requested=True,
+        references_previous=True,
+        capabilities=("browser",),
+    )
+    prompt = (
+        "Jeszcze raz tłumaczę: znajdź na GitHubie przydatne narzędzia i "
+        "umiejętności dotyczące darknetu, OSINT i cyber security. Przedstaw "
+        "konkretną listę do mojego zatwierdzenia, zanim cokolwiek przyswoisz."
+    )
+
+    assert Agent._web_reference_requires_history(intent, prompt) is False
+
+
+def test_bare_web_reference_still_requires_dialogue_history() -> None:
+    intent = SemanticIntent(
+        message_clear=True,
+        action_requested=True,
+        references_previous=True,
+        capabilities=("browser",),
+    )
+
+    assert Agent._web_reference_requires_history(
+        intent,
+        "Search for that again.",
+    ) is True
+
+
+def test_browser_research_batch_stops_after_first_uncaptured_navigation() -> None:
+    contract = TaskContract(
+        requires_browser_navigation=True,
+        requires_browser_snapshot=True,
+        requires_web_discovery=True,
+        requires_evidence_report=True,
+        minimum_detail_sources=2,
+        required_research_facets=("github_repositories",),
+    )
+    requests = [
+        {
+            "tool": "browser_navigate",
+            "arguments": {"url": "https://github.com/example/one"},
+        },
+        {
+            "tool": "browser_navigate",
+            "arguments": {"url": "https://github.com/example/two"},
+        },
+    ]
+
+    assert Agent._bound_browser_evidence_batch(requests, contract) == requests[:1]
+
+
+def test_browser_research_batch_keeps_capture_before_next_navigation() -> None:
+    contract = TaskContract(
+        requires_browser_navigation=True,
+        requires_browser_snapshot=True,
+        requires_web_discovery=True,
+        requires_evidence_report=True,
+        minimum_detail_sources=2,
+        required_research_facets=("github_repositories",),
+    )
+    requests = [
+        {
+            "tool": "browser_navigate",
+            "arguments": {"url": "https://github.com/example/one"},
+        },
+        {"tool": "browser_snapshot", "arguments": {}},
+        {
+            "tool": "browser_navigate",
+            "arguments": {"url": "https://github.com/example/two"},
+        },
+    ]
+
+    assert Agent._bound_browser_evidence_batch(requests, contract) == requests[:2]
+
+
 @pytest.mark.asyncio
 async def test_agent_continuation_inherits_browser_contract_and_tool_routing(
     tmp_path: Path,
@@ -6881,6 +7624,7 @@ async def test_agent_uses_semantic_browser_intent_for_hungarian_request(
                 action_requested=True,
                 capabilities=("browser",),
                 requires_report=True,
+                distinct_detail_page=True,
             )
 
     class LLMStub:
@@ -7161,6 +7905,12 @@ def test_agent_rejects_promises_to_search_or_use_a_tool_later() -> None:
     )
     assert Agent._claims_unverified_work(
         "No direct match. Let me search for skills instead."
+    )
+    assert Agent._claims_unverified_work(
+        "Okay, let's go deeper. I've already pulled down two repositories. "
+        "Now I need to extract the most relevant details from each. First, "
+        "I'll dive into the first repository. After that, I'll compile both "
+        "into a concise list ready for your approval."
     )
 
 
@@ -9269,11 +10019,196 @@ async def test_two_mangled_final_reports_fall_back_to_verified_evidence(
 
     assert llm.turn == 4
     assert tools.calls == ["browser_navigate", "browser_snapshot"]
-    assert "killed that rewrite loop" in answer
+    assert "removed the unsupported claims" in answer
     assert f"Source: {exact_url}" in answer
     journal = next(
         (agent._agent_trace_root / "journal").glob("*.jsonl")
     ).read_text(encoding="utf-8")
+    assert "final_answer_loop_cut_off" in journal
+
+
+@pytest.mark.asyncio
+async def test_unique_observed_url_on_same_host_repairs_final_report(
+    tmp_path: Path,
+) -> None:
+    exact_url = "https://example.test/verified-page"
+    invented_url = "https://example.test/invented-page"
+
+    class ToolsStub:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def openai_tool_definitions(self) -> list[dict]:
+            return [
+                {"type": "function", "function": {"name": name}}
+                for name in ("browser_navigate", "browser_snapshot")
+            ]
+
+        async def call(self, tool: str, arguments: dict) -> str:
+            self.calls.append(tool)
+            if tool == "browser_snapshot":
+                return (
+                    f"- Page URL: {exact_url}\n"
+                    "- Page Title: Verified Example\n"
+                    '- heading "Observed content" [level=2]'
+                )
+            return f"- Page URL: {exact_url}"
+
+    class LLMStub:
+        config = SimpleNamespace(context=8_192)
+
+        def __init__(self) -> None:
+            self.turn = 0
+
+        async def respond(self, **kwargs) -> LLMResponse:
+            self.turn += 1
+            if self.turn == 1:
+                return LLMResponse(
+                    tool_calls=[
+                        LLMToolCall(
+                            "navigate",
+                            "browser_navigate",
+                            {"url": exact_url},
+                        )
+                    ]
+                )
+            if self.turn == 2:
+                return LLMResponse(
+                    tool_calls=[LLMToolCall("snapshot", "browser_snapshot", {})]
+                )
+            return LLMResponse(
+                content=(
+                    f"I inspected {invented_url} and found Verified Example, Boss."
+                )
+            )
+
+    class MemoryStub:
+        def __init__(self) -> None:
+            self.session = Session()
+
+        async def process(self, *args, **kwargs) -> None:
+            return None
+
+    tools = ToolsStub()
+    llm = LLMStub()
+    agent = object.__new__(Agent)
+    agent.llm = llm
+    agent.tools = tools
+    agent.memory = MemoryStub()
+    agent.persona = PersonaRuntime(identity=IdentityKernel(), voice=VoiceProfile())
+    agent._build_system_prompt = lambda prompt, agent_mode: "system"
+    agent._agent_trace_root = tmp_path / "interactive"
+    agent._last_execution_context = None
+
+    answer = await agent._run_agent_loop(
+        f"Inspect {exact_url} and report what is there."
+    )
+    await asyncio.gather(*agent._memory_tasks)
+
+    assert llm.turn == 3
+    assert tools.calls == ["browser_navigate", "browser_snapshot"]
+    assert exact_url in answer
+    assert invented_url not in answer
+    journal = next(
+        (agent._agent_trace_root / "journal").glob("*.jsonl")
+    ).read_text(encoding="utf-8")
+    assert "final_answer_urls_repaired" in journal
+    assert "final_answer_loop_cut_off" not in journal
+
+
+@pytest.mark.asyncio
+async def test_unsupported_online_claims_are_removed_but_observed_text_survives(
+    tmp_path: Path,
+) -> None:
+    exact_url = "https://example.test/verified-report"
+    invented_url = "https://example.test/made-up-report"
+    observed_text = (
+        "The inspected report describes a public enforcement action and its date"
+    )
+
+    class ToolsStub:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def openai_tool_definitions(self) -> list[dict]:
+            return [
+                {"type": "function", "function": {"name": name}}
+                for name in ("browser_navigate", "browser_snapshot")
+            ]
+
+        async def call(self, tool: str, arguments: dict) -> str:
+            self.calls.append(tool)
+            if tool == "browser_snapshot":
+                return (
+                    f"- Page URL: {exact_url}\n"
+                    "- Page Title: Verified Enforcement Report\n"
+                    '- heading "Observed operation" [level=2]\n'
+                    f"- paragraph: {observed_text}."
+                )
+            return f"- Page URL: {exact_url}"
+
+    class LLMStub:
+        config = SimpleNamespace(context=8_192)
+
+        def __init__(self) -> None:
+            self.turn = 0
+
+        async def respond(self, **kwargs) -> LLMResponse:
+            self.turn += 1
+            if self.turn == 1:
+                return LLMResponse(
+                    tool_calls=[
+                        LLMToolCall(
+                            "navigate",
+                            "browser_navigate",
+                            {"url": exact_url},
+                        )
+                    ]
+                )
+            if self.turn == 2:
+                return LLMResponse(
+                    tool_calls=[LLMToolCall("snapshot", "browser_snapshot", {})]
+                )
+            return LLMResponse(
+                content=(
+                    f"Source: {invented_url}. **Marketplace X** and "
+                    "**Ransomware Hub** were confirmed active."
+                )
+            )
+
+    class MemoryStub:
+        def __init__(self) -> None:
+            self.session = Session()
+
+        async def process(self, *args, **kwargs) -> None:
+            return None
+
+    tools = ToolsStub()
+    llm = LLMStub()
+    agent = object.__new__(Agent)
+    agent.llm = llm
+    agent.tools = tools
+    agent.memory = MemoryStub()
+    agent.persona = PersonaRuntime(identity=IdentityKernel(), voice=VoiceProfile())
+    agent._build_system_prompt = lambda prompt, agent_mode: "system"
+    agent._agent_trace_root = tmp_path / "interactive"
+    agent._last_execution_context = None
+
+    answer = await agent._run_agent_loop(
+        f"Inspect {exact_url} and report what is there."
+    )
+    await asyncio.gather(*agent._memory_tasks)
+
+    assert llm.turn == 4
+    assert exact_url in answer
+    assert invented_url not in answer
+    assert observed_text in answer
+    assert "Marketplace X" not in answer
+    assert "Ransomware Hub" not in answer
+    journal = next(
+        (agent._agent_trace_root / "journal").glob("*.jsonl")
+    ).read_text(encoding="utf-8")
+    assert "grounded_report_salvaged" in journal
     assert "final_answer_loop_cut_off" in journal
 
 

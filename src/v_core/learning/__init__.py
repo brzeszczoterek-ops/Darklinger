@@ -1,4 +1,11 @@
 from .audit import LearningAuditReport, audit_learning_store
+from .capability_audit import (
+    CapabilityAssessment,
+    CapabilityRisk,
+    assess_skill,
+    assess_tool,
+    notification_events,
+)
 from .models import (
     ArtifactKind,
     ArtifactRecord,
@@ -45,6 +52,8 @@ __all__ = [
     "ArtifactScope",
     "ArtifactStatus",
     "ArtifactValidationError",
+    "CapabilityAssessment",
+    "CapabilityRisk",
     "EvidenceOutcome",
     "EvidenceSource",
     "GeneratedToolError",
@@ -72,4 +81,7 @@ __all__ = [
     "repair_generated_source_json_wrapper",
     "schema_from_example",
     "audit_learning_store",
+    "assess_skill",
+    "assess_tool",
+    "notification_events",
 ]

@@ -308,6 +308,13 @@ h2 { margin-top: 4px; font: 720 22px/1.1 var(--sans); }
 .capability-label { margin-top: 16px; }
 .capability-list span { border-color: rgba(255,203,107,.14); color: #b8a57c; background: rgba(255,203,107,.025); }
 .foundry-state { margin-top: 12px; color: #9d8e6d; font: 12px/1.5 var(--mono); }
+.capability-audit-label { margin-top: 16px; }
+.capability-audit-list { display: grid; gap: 8px; margin-top: 10px; }
+.capability-audit { padding: 10px; border: 1px solid rgba(255,203,107,.17); background: rgba(0,0,0,.13); }
+.capability-audit.critical { border-color: rgba(255,77,100,.4); }
+.capability-audit strong { color: #ffe0a3; font: 700 13px/1.4 var(--mono); }
+.capability-audit.critical strong { color: #ff8797; }
+.capability-audit p { margin-top: 6px; color: #bfb39a; font: 12px/1.5 var(--mono); }
 .proposal-label { margin-top: 16px; }
 .proposal-list { display: grid; gap: 8px; margin-top: 10px; }
 .proposal { padding: 10px; border: 1px solid rgba(255,203,107,.17); background: rgba(0,0,0,.13); }

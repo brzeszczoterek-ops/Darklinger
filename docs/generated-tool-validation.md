@@ -177,7 +177,8 @@ input and output fields, rejects conflicting outputs for the same input, and
 stops for clarification when the contract is absent or ambiguous.
 
 The frozen contract is not shown to the source model as editable test data. The
-source model receives only the required input and output field names. PALADYN
+source model receives the required input/output field names and read-only
+examples. PALADYN
 runs every frozen example independently in Bubblewrap and activation requires
 all comparisons to pass. Only afterward does the runtime invoke the active tool
 with the separately frozen final arguments. Candidate output can never become a
@@ -238,6 +239,53 @@ The fresh local AgenticQwen run on 2026-09-16 also passed. Its trace
 Bubblewrap; the independent holdout and fresh-runtime reload matched their
 expected results. Evidence is under `/tmp/paladyn-har-trial-8dn8ncti`, including
 `report.json` and the checkpoint/journal. The run lasted 603 seconds, from
-02:42:50 to 02:52:54 UTC. Slow generation remains a practical limitation. This
+02:42:50 to 02:52:54 UTC. This server was manually launched with default reasoning
+and four slots, unlike PALADYN's default reasoning-off/single-slot profile. It
+must not be used as the application-profile speed baseline. This
 trial exercises explicit synthetic HAR inputs and expectations, not live website
 traffic capture, general natural-language contract discovery, or every tool.
+
+## Source-context performance (2026-09-16)
+
+Source generation no longer repeats the full contract inside every grounding
+quote. The contract projection contains each fixed input/expected-output example
+once, without the final invocation or provenance copies. The runtime retains the full contract,
+all independent tests, and final arguments unchanged. An embedded explicit JSON
+contract is elided from the source objective only when it exactly matches the
+frozen contract and contains no unknown extension fields. Surrounding prose,
+natural-language objectives, unknown data, runtime operation specifications and
+bounded rejection feedback are preserved. This is structural projection, not
+language-specific intent matching or a reduced validation policy.
+
+The HAR script now records per-completion wall time, provider token counts and
+timings when available, cache reuse, and total task time. `--cold-context`
+disables prompt-cache reuse for the trial only; production caching is unchanged.
+Measurements do not record reasoning text or issue extra generations. The trial
+still requires actual creation/execution receipts, all three frozen examples,
+the separate final result, an unseen holdout and successful runtime reload.
+
+The measured server used AgenticQwen-8B.Q8_0, PALADYN's `build_server_command`
+with one slot, reasoning off, balanced repetition penalties, Q8 KV cache, 99 GPU
+layers and context 16000 (server-rounded to 16128). Temperature was 0 and the
+source cap remained 1536. The model was already loaded for each measured task;
+startup time is excluded. No network tool or remote model was involved.
+
+| Trial | Input tokens | Output tokens | Cache tokens | Prompt processing | Generation | Entire task |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Before, empty cache | 3976 | 283 | 0 | 14.65 s | 57.06 s | 72.81 s |
+| Before, repeated with cache disabled | 3976 | 283 | 0 | 14.15 s | 58.74 s | 74.18 s |
+| After, cache disabled | 893 | 290 | 0 | 2.95 s | 45.62 s | 49.70 s |
+| After, warm prefix | 893 | 290 | 544 | 1.33 s | 46.88 s | 49.57 s |
+
+All these trials passed, without repair attempts. Evidence directories are
+`/tmp/paladyn-har-trial-uz6ucim7` (before),
+`/tmp/paladyn-har-trial-i28ng9m5` (after, cold), and
+`/tmp/paladyn-har-trial-_gt7fm4t` (after, warm); each contains `report.json` and
+execution traces. The repeated baseline is `/tmp/paladyn-har-trial-3841uytv`:
+only `_generated_source_messages` was restored in the test process from commit
+`da98778`; the working tree, server settings and trial checks were unchanged.
+These temporary files are local evidence, not release assets.
+The cold comparison reduced input tokens by about 78% and task time by about
+32%. This is one bounded explicit-contract workload on one local model, not a
+promise of the same speedup for routing, arbitrary natural-language tasks,
+every model or every tool. Generation still dominates the elapsed time.

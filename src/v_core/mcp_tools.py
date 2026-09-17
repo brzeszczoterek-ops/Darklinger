@@ -107,6 +107,7 @@ class MCPTools:
         self.interaction_prompt = ""
         self._creation_validation_receipt = None
         self._generated_tool_contract: GeneratedToolContract | None = None
+        self._creation_origin = "unknown"
         self._observed_browser_snapshot = ""
         self._web_discovered_urls: dict[str, str] = {}
         self._web_search_performed = False
@@ -272,9 +273,30 @@ class MCPTools:
         self.interaction_prompt = str(prompt)[:20_000]
         self._creation_validation_receipt = None
         self._generated_tool_contract = None
+        self._creation_origin = "unknown"
         self._web_discovered_urls = {}
         self._web_search_performed = False
         self._observed_browser_snapshot = ""
+
+    def set_creation_origin(self, owner_requested: bool) -> None:
+        """Record provenance independently from model-supplied tool arguments."""
+
+        self._creation_origin = (
+            "owner_requested" if owner_requested else "agent_initiated"
+        )
+        if self.learning is not None:
+            self.learning.set_creation_context(
+                origin=self._creation_origin,
+                task_id=self.interaction_id,
+            )
+
+    async def self_test_tool(self, name: str) -> dict[str, Any] | None:
+        """Run a core deterministic fixture without using configured providers."""
+        from .osint_self_test import self_test_osint_tool
+
+        # Exercise the shipped implementation, never a runtime subclass that
+        # may have replaced the method being audited.
+        return await self_test_osint_tool(name, MCPTools)
 
     def set_generated_tool_contract(self, contract: GeneratedToolContract) -> None:
         """Freeze a grounded contract before any candidate source is generated."""

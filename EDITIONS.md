@@ -33,6 +33,25 @@ Both editions retain the execution-evidence contract, external emergency stop,
 capability ownership, generated-code validation, audit trail, and protected
 agent core.
 
+## Content boundaries and capability control
+
+The editions share one outcome-based content contract. It distinguishes
+fiction, role-playing, history, journalism, research, hazard recognition, and
+defensive safety analysis from instructions that materially enable immediate
+real-world harm. The shared hard-stop set is intentionally narrow: child sexual
+exploitation, sexual coercion or enslavement, operational suicide assistance,
+real-world killing or serious injury, biological or nuclear weapons, and
+operational construction or deployment of weapons or explosives intended to
+harm people. Full does not add a separate topic blacklist beyond that set.
+
+Public limits what generated artifacts may do: they cannot grant themselves
+host, network, credential, persistence, policy, or edition authority. Full
+keeps its separately authorized owner capabilities and records generated tools
+and skills in a capability ledger. The ledger classifies concrete primitives,
+records whether creation was owner-requested or agent-initiated, and surfaces
+sensitive changes in the Owner Deck without storing generated source code in
+the audit entry.
+
 ## Public export
 
 Run the exporter from the private repository:

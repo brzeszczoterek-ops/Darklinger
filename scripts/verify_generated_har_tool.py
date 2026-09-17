@@ -6,11 +6,13 @@ before generation. The holdout is never included in its prompt.
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import os
 from pathlib import Path
 import tempfile
+import time
 from types import SimpleNamespace
 from urllib.request import urlopen
 
@@ -71,7 +73,40 @@ class Memory:
         pass
 
 
-async def main():
+def measure_completions(llm, measurements, *, cold_context=False):
+    """Record provider counts/timings, not reasoning text or additional requests."""
+    create = llm.client.chat.completions.create
+
+    async def measured(**request):
+        if cold_context:
+            request['extra_body'] = {**request.get('extra_body', {}), 'cache_prompt': False}
+        started = time.monotonic()
+        metric = {
+            'phase': 'source' if any('SOURCE PHASE' in str(m.get('content', ''))
+                                   for m in request.get('messages', [])) else 'other',
+            'input_chars': sum(len(str(m.get('content', '')))
+                               for m in request.get('messages', [])),
+            'sampling': {key: request[key] for key in ('temperature', 'top_p', 'max_tokens')
+                         if key in request},
+        }
+        measurements.append(metric)
+        try:
+            response = await create(**request)
+            if response.usage is not None:
+                metric['usage'] = response.usage.model_dump()
+            timings = getattr(response, 'timings', None)
+            if isinstance(timings, dict):
+                metric['provider_timings'] = timings
+            metric['finish_reason'] = response.choices[0].finish_reason
+            return response
+        finally:
+            metric['elapsed_seconds'] = round(time.monotonic() - started, 3)
+            print('Completion timing: ' + json.dumps(metric), flush=True)
+
+    llm.client.chat.completions.create = measured
+
+
+async def main(*, cold_context=False):
     # A fixed loopback address deliberately prevents accidental remote API usage.
     with urlopen('http://127.0.0.1:5001/slots', timeout=5) as response:
         slots = json.load(response)
@@ -95,6 +130,15 @@ async def main():
     agent._build_system_prompt = lambda prompt, agent_mode: 'Report only actual execution results.'
     agent._agent_trace_root = root / 'traces'
     report = {'model': model, 'root': str(root), 'passed': False}
+    report['completions'] = []
+    report['cold_context'] = cold_context
+    measure_completions(agent.llm, report['completions'], cold_context=cold_context)
+    # Snapshot the server settings so runs with different reasoning/slot/cache
+    # settings cannot silently be presented as a prompt-only speed comparison.
+    with urlopen('http://127.0.0.1:5001/props', timeout=5) as response:
+        report['server_settings'] = json.load(response).get('default_generation_settings', {})
+    report['server_slots'] = len(slots)
+    started = time.monotonic()
     try:
         # The outer trial also covers final reporting. The executor separately
         # bounds source generation and the shared creation budget.
@@ -124,11 +168,16 @@ async def main():
         report['error'] = f'{type(error).__name__}: {error}'
         raise
     finally:
+        report['elapsed_seconds'] = round(time.monotonic() - started, 3)
         await asyncio.gather(*getattr(agent, '_memory_tasks', []), return_exceptions=True)
         await agent.llm.client.close()
         (root / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
-        print(json.dumps(report, indent=2), flush=True)
+        print(json.dumps({key: value for key, value in report.items()
+                          if key != 'server_settings'}, indent=2), flush=True)
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--cold-context', action='store_true',
+                        help='Disable llama.cpp prompt-cache reuse for a comparable timing trial.')
+    asyncio.run(main(cold_context=parser.parse_args().cold_context))

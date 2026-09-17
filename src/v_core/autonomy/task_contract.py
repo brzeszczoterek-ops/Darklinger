@@ -19,29 +19,54 @@ _ONLINE_ACTION = re.compile(
     r"\b(?:aggregate|browse|check|collect|extract|find|gather|inspect|list|log\s+in|look\s+for|monitor|open|"
     r"register|research|scan|search|visit|crawl|scrape|"
     r"ekstrakc\w*|gromad\w*|monitor\w*|przejr\w*|przeszuk\w*|sprawd\w*|(?:po)?szuk\w*|wejd\w*|"
-    r"wej[śsćc]\w*|wyszuk\w*|wyciagn\w*|wyciągn\w*|zalog\w*|za[łl]o[żz]\w*|"
-    r"zbier\w*|znajd\w*)\b",
+    r"wej[śsćc]\w*|wesz\w*|wyszuk\w*|wyciagn\w*|wyciągn\w*|zalog\w*|za[łl]o[żz]\w*|"
+    r"zbier\w*|znajd\w*|znalaz\w*|znale\w*)\b",
     re.IGNORECASE,
 )
 _ONLINE_RESOURCE = re.compile(
-    r"\b(?:browser|darknet|forum\w*|internet|online|page|repository|repo|site|web|website|"
+    r"\b(?:browser|darkne\w*|forum\w*|internet|online|page|repository|repo|site|web|website|"
     r"github|facebook\w*|instagram\w*|linkedin\w*|osint|profile|social\s+media|"
     r"internet\w*|interne\w*|market\w*|profil\w*|sie[cć]\w*|stron\w*|"
     r"witryn\w*)\b",
     re.IGNORECASE,
 )
 _TOR_ACCESS_REQUEST = re.compile(
-    r"(?:\b(?:w|przez)\s+(?:darknet\w*|sieci\s+tor)\b|"
+    r"(?:\b(?:w|przez)\s+(?:darkne\w*|sieci\s+tor)\b|"
     r"\b(?:forum\w*|market\w*|stron\w*|witryn\w*)\b.{0,48}"
     r"\b(?:na|przez|w)\s+torze\b|"
     r"\b(?:in|on|through|via)\s+(?:the\s+)?"
     r"(?:darknet|dark\s*web|tor\s+network)\b|"
     r"\b(?:forum|market|site|website)s?\b.{0,48}\b(?:on|through|via)\s+tor\b|"
-    r"\b(?:przeszuk\w*|wejd\w*|wej[śsćc]\w*)\s+(?:do\s+|w\s+)?(?:darknet\w*|sie[cć]\s+tor)\b|"
+    r"\b(?:przeszuk\w*|wejd\w*|wej[śsćc]\w*)\s+(?:do\s+|w\s+)?(?:darkne\w*|sie[cć]\s+tor)\b|"
     r"\b(?:search|browse|visit|open|inspect)\s+(?:the\s+)?"
     r"(?:darknet|dark\s*web|tor\s+network)\b|"
     r"\b(?:using|używ\w*|uzyw\w*)\s+(?:the\s+)?tor(?:\s+browser)?\b|"
     r"\.onion\b)",
+    re.IGNORECASE,
+)
+_GITHUB_SURFACE = re.compile(r"\bgithub\w*(?:\.com)?\b", re.IGNORECASE)
+_GITHUB_CANDIDATE_RESEARCH = re.compile(
+    r"\b(?:github\w*(?:\.com)?|repo(?:sitory|sitories)?|repozytori\w*)\b"
+    r"(?:(?![.!?;\n]).){0,180}\b"
+    r"(?:tool\w*|skill\w*|repo(?:sitory|sitories)?|"
+    r"narz[eę]dzi\w*|umiej[eę]tno\w*|repozytori\w*)\b|"
+    r"\b(?:tool\w*|skill\w*|repo(?:sitory|sitories)?|"
+    r"narz[eę]dzi\w*|umiej[eę]tno\w*|repozytori\w*)\b"
+    r"(?:(?![.!?;\n]).){0,180}\bgithub\w*(?:\.com)?\b",
+    re.IGNORECASE,
+)
+_TOR_SURFACE = re.compile(
+    r"\b(?:darkne\w*|dark\s*web|torze|tor\s+network|sie[cć]\w*\s+tor)\b",
+    re.IGNORECASE,
+)
+_EXPLICIT_TOR_TRANSPORT = re.compile(
+    r"(?:\b(?:through|via|using)\s+(?:the\s+)?tor(?:\s+browser)?\b|"
+    r"\bprzez\s+(?:sie[cć]\s+)?tor\b|"
+    r"\bu[żz]yw\w*\s+(?:sieci\s+)?tor\w*\b|\.onion\b)",
+    re.IGNORECASE,
+)
+_PURPOSE_ACTION_PREFIX = re.compile(
+    r"(?:\b(?:do|for|für|pour|para|per|pro|для)\s+)$",
     re.IGNORECASE,
 )
 _EXPLICIT_ONION_ADDRESS = re.compile(
@@ -295,6 +320,24 @@ _PUBLIC_FACT_FIELDS = (
         re.IGNORECASE,
     )),
 )
+_NETWORK_ADDRESS_CONTEXT = re.compile(
+    r"(?:\b(?:darkne\w*|dark\s*web|tor\s+network|onion|url|uri|link|domain|"
+    r"web\s*address|network\s+address|website\s+address|site\s+address)\w*\b|"
+    r"\b(?:adres\w*|address\w*)\b[^.!?;\n]{0,64}\b(?:"
+    r"darkne\w*|domen\w*|internet\w*|link\w*|onion\w*|sie[cć]\w*|"
+    r"stron\w*|tor\w*|url\w*|witryn\w*|web\w*)\b|"
+    r"\b(?:darkne\w*|domen\w*|internet\w*|link\w*|onion\w*|sie[cć]\w*|"
+    r"stron\w*|tor\w*|url\w*|witryn\w*|web\w*)\b[^.!?;\n]{0,64}"
+    r"\b(?:adres\w*|address\w*)\b)",
+    re.IGNORECASE,
+)
+_PHYSICAL_ADDRESS_CONTEXT = re.compile(
+    r"\b(?:building|business|city|headquarters|mailing|office|physical|postal|"
+    r"premises|shop|store|street|venue|"
+    r"budyn\w*|fizyczn\w*|lokal\w*|miast\w*|poczt\w*|siedzib\w*|"
+    r"sklep\w*|ulic\w*)\b",
+    re.IGNORECASE,
+)
 _PUBLIC_WHERE_FIELD = re.compile(r"\b(?:where|gdzie)\b", re.IGNORECASE)
 _PUBLIC_PRICE_CONTEXT = re.compile(
     r"\b(?:how\s+much|ile)\b[^,.!?;\n]{0,64}\b(?:cost\w*|price\w*|cen\w*|koszt\w*)\b",
@@ -349,6 +392,7 @@ _RESEARCH_FACET_NAMES = frozenset(
         "item_descriptions",
         "images",
         "exhaustive_coverage",
+        "github_repositories",
     }
 )
 _FIRST_HEADING = re.compile(
@@ -367,13 +411,46 @@ _RAW_BROWSER_SCAFFOLD = re.compile(
     re.IGNORECASE,
 )
 _GROUNDING_ENTITY_STOPWORDS = {
-    "another", "based", "boss", "first", "finally", "here", "however",
+    "another", "based", "boss", "description", "feature", "features",
+    "first", "finally", "here", "however", "key",
     "english", "finding", "findings", "lastly", "next", "okay", "open",
     "paladyn", "please", "response", "result", "results", "second",
     "section", "sections", "source", "sources", "still", "the", "therefore",
     "this", "third", "verified", "would",
 }
 _HTTP_URL = re.compile(r"https?://[^\s<>\[\](){}\"']+", re.IGNORECASE)
+_GITHUB_REPOSITORY_IDENTIFIER = re.compile(
+    r"(?<![A-Za-z0-9._/-])"
+    r"([A-Za-z0-9](?:[A-Za-z0-9._-]{0,38})/"
+    r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99}))"
+    r"(?![A-Za-z0-9._/-])"
+)
+_GITHUB_RESERVED_ROOTS = frozenset(
+    {
+        "about",
+        "apps",
+        "collections",
+        "customer-stories",
+        "enterprise",
+        "events",
+        "explore",
+        "features",
+        "issues",
+        "marketplace",
+        "new",
+        "notifications",
+        "orgs",
+        "pricing",
+        "pulls",
+        "search",
+        "security",
+        "settings",
+        "site",
+        "sponsors",
+        "topics",
+        "trending",
+    }
+)
 
 
 def _grounding_url_key(value: str) -> str:
@@ -383,6 +460,51 @@ def _grounding_url_key(value: str) -> str:
     hostname = (parsed.hostname or "").casefold().removeprefix("www.")
     path = unquote(parsed.path).rstrip("/").casefold()
     return hostname + path if hostname else ""
+
+
+def _github_repository_identifier(value: str) -> str:
+    """Return the exact owner/repository pair from a GitHub repository URL."""
+
+    parsed = urlsplit(unescape(value.rstrip(".,;:!?")))
+    hostname = (parsed.hostname or "").casefold().removeprefix("www.")
+    if hostname != "github.com":
+        return ""
+    segments = [unquote(part) for part in parsed.path.split("/") if part]
+    if len(segments) < 2 or segments[0].casefold() in _GITHUB_RESERVED_ROOTS:
+        return ""
+    owner, repository = segments[:2]
+    if repository.endswith(".git"):
+        repository = repository[:-4]
+    if not owner or not repository:
+        return ""
+    return f"{owner}/{repository}"
+
+
+def _claimed_github_repository_identifiers(answer: str) -> set[str]:
+    """Extract repository claims without treating arbitrary prose paths as repos."""
+
+    claims = {
+        identifier
+        for url in _HTTP_URL.findall(answer)
+        if (identifier := _github_repository_identifier(url))
+    }
+    answer_without_urls = _HTTP_URL.sub("", answer)
+    for line in answer_without_urls.splitlines():
+        identifiers = {
+            match.group(1)
+            for match in _GITHUB_REPOSITORY_IDENTIFIER.finditer(line)
+        }
+        if not identifiers:
+            continue
+        line_folded = line.casefold()
+        if (
+            "github" in line_folded
+            or "repo" in line_folded
+            or line.lstrip().startswith(("-", "*"))
+            or re.match(r"\s*\d{1,3}[.)]\s", line)
+        ):
+            claims.update(identifiers)
+    return claims
 
 
 def _grounding_entity_is_present(entity: str, grounding_text: str) -> bool:
@@ -636,7 +758,10 @@ class TaskContract:
             object.__setattr__(self, "requires_created_tool_execution", False)
             object.__setattr__(self, "requires_created_skill", False)
         if (
-            "exhaustive_coverage" in self.required_research_facets
+            (
+                "exhaustive_coverage" in self.required_research_facets
+                or "github_repositories" in self.required_research_facets
+            )
             and self.requires_web_discovery
             and self.requires_evidence_report
             and self.minimum_detail_sources < 2
@@ -737,9 +862,53 @@ class TaskContract:
     def prefers_tor(prompt: str) -> bool:
         """Return whether the requested online surface is Tor rather than clearnet."""
 
-        return bool(_TOR_ACCESS_REQUEST.search(prompt)) and not (
-            TaskContract.disables_web(prompt)
-        )
+        if TaskContract.disables_web(prompt):
+            return False
+        if _EXPLICIT_TOR_TRANSPORT.search(prompt):
+            return True
+        if not _TOR_ACCESS_REQUEST.search(prompt):
+            return False
+
+        # Choose the surface bound to the user's actual online action instead
+        # of letting any high-salience topic word win globally.  For example,
+        # "search GitHub for tools for searching the darknet" names GitHub as
+        # the search surface; darknet describes the tools.  Conversely,
+        # "search the darknet for GitHub repositories" still selects Tor.
+        # This relation is structural: target names and action spans are used,
+        # so the semantic router can supply the action in languages not covered
+        # by the deterministic recovery vocabulary.
+        for action in _ONLINE_ACTION.finditer(prompt):
+            # A capability description such as "tools *for searching* the
+            # darknet" is not the user's requested action.  Skip purpose
+            # clauses before binding the first actual instruction to a surface.
+            prefix = prompt[max(0, action.start() - 20) : action.start()]
+            if _PURPOSE_ACTION_PREFIX.search(prefix):
+                continue
+            clause_end = len(prompt)
+            next_punctuation = re.search(r"[.!?;\n]", prompt[action.end() :])
+            if next_punctuation is not None:
+                clause_end = action.end() + next_punctuation.start()
+            candidates: list[tuple[int, str]] = []
+            for surface, pattern in (
+                ("clearnet", _GITHUB_SURFACE),
+                ("tor", _TOR_SURFACE),
+            ):
+                next_target = pattern.search(prompt, action.end(), clause_end)
+                if next_target is not None:
+                    gap = next_target.start() - action.end()
+                    if gap <= 64:
+                        candidates.append((gap, surface))
+            if candidates:
+                # The first actual instruction establishes the search surface;
+                # later clauses describe filters, subjects, or follow-up work.
+                return min(candidates)[1] == "tor"
+        if _GITHUB_SURFACE.search(prompt):
+            # When the deterministic vocabulary does not cover the sentence's
+            # language, do not let an ambiguous topic mention force Tor over a
+            # concrete named source. The semantic router still decides whether
+            # browser work is requested.
+            return False
+        return True
 
     @staticmethod
     def asks_about_creation_capability(prompt: str) -> bool:
@@ -818,6 +987,19 @@ class TaskContract:
             and _PUBLIC_EXPLICIT_COUNT_CONTEXT.search(prompt) is None
         ):
             fields.remove("count")
+        # ``Address`` is overloaded across languages: it may mean a postal
+        # location or a URL/onion endpoint. Public-fact address evidence is
+        # intentionally limited to the former. Otherwise a request for the
+        # names and addresses of online services becomes an impossible postal
+        # lookup and every mechanically successful search still leaves the
+        # contract open. Explicit physical-location wording wins when both
+        # meanings appear in the same request.
+        if (
+            "address" in fields
+            and _NETWORK_ADDRESS_CONTEXT.search(prompt) is not None
+            and _PHYSICAL_ADDRESS_CONTEXT.search(prompt) is None
+        ):
+            fields.remove("address")
         # A bare ``where`` can request a physical location, but in a purchase
         # clause it asks for a seller/source instead of a postal address. Treat
         # that distinction before public-fact recovery starts; otherwise an
@@ -857,7 +1039,7 @@ class TaskContract:
     def from_prompt(cls, prompt: str) -> "TaskContract":
         explicit_web_targets = extract_web_targets(prompt)
         web_disabled = bool(_DISABLE_WEB.search(prompt))
-        tor_requested = not web_disabled and bool(_TOR_ACCESS_REQUEST.search(prompt)) and (
+        tor_requested = cls.prefers_tor(prompt) and (
             bool(_ONLINE_ACTION.search(prompt))
             or bool(_EXPLICIT_ONION_ADDRESS.search(prompt))
         )
@@ -1052,6 +1234,14 @@ class TaskContract:
             if tor_requested
             else (),
             required_public_fields=public_fields,
+            required_research_facets=(
+                ("github_repositories",)
+                if web_discovery
+                and evidence_report
+                and _GITHUB_CANDIDATE_RESEARCH.search(prompt)
+                and not _DETAIL_PAGE.search(prompt)
+                else ()
+            ),
         )
 
     @classmethod
@@ -1413,6 +1603,16 @@ class TaskContract:
                 for navigation_index, url in navigations:
                     if _is_search_listing_url(url):
                         continue
+                    if "github_repositories" in self.required_research_facets:
+                        parsed = urlsplit(url)
+                        if (
+                            (parsed.hostname or "")
+                            .casefold()
+                            .removeprefix("www.")
+                            != "github.com"
+                            or not _github_repository_identifier(url)
+                        ):
+                            continue
                     discovered = any(
                         index < navigation_index
                         and call.get("tool") == "web_search"
@@ -1448,6 +1648,11 @@ class TaskContract:
                     if (
                         url
                         and not _is_search_listing_url(url)
+                        and (
+                            "github_repositories"
+                            not in self.required_research_facets
+                            or bool(_github_repository_identifier(url))
+                        )
                         and _web_read_has_substantive_content(call)
                         and any(
                             index < read_index
@@ -1792,6 +1997,31 @@ class TaskContract:
                     "answer:ungrounded_online_urls="
                     + "|".join(ungrounded_urls[:6])
                 ]
+            observed_repository_identifiers = {
+                identifier
+                for call in calls
+                if call.get("status", "succeeded") == "succeeded"
+                for value in (
+                    str(call.get("arguments", {}).get("url", ""))
+                    if isinstance(call.get("arguments"), dict)
+                    else "",
+                    str(call.get("result_excerpt", "")),
+                )
+                for url in _HTTP_URL.findall(value)
+                if (identifier := _github_repository_identifier(url))
+            }
+            claimed_repository_identifiers = (
+                _claimed_github_repository_identifiers(answer)
+            )
+            ungrounded_repository_identifiers = sorted(
+                claimed_repository_identifiers
+                - observed_repository_identifiers
+            )
+            if ungrounded_repository_identifiers:
+                return [
+                    "answer:ungrounded_repository_identifiers="
+                    + "|".join(ungrounded_repository_identifiers[:6])
+                ]
             claimed_entities: set[str] = set()
             grounded_highlight_spans: list[tuple[int, int]] = []
             for highlighted in re.finditer(
@@ -1926,6 +2156,65 @@ class TaskContract:
         language: str = "English",
     ) -> str | None:
         """Produce exact results for objectives that require no model judgment."""
+
+        if "github_repositories" in self.required_research_facets:
+            repositories: list[tuple[str, str, str]] = []
+            seen: set[str] = set()
+            for call in calls:
+                if (
+                    call.get("status", "succeeded") != "succeeded"
+                    or call.get("tool") != "browser_snapshot"
+                ):
+                    continue
+                excerpt = str(call.get("result_excerpt", ""))
+                url_match = re.search(
+                    r"^- Page URL:\s*(https?://\S+)",
+                    excerpt,
+                    re.MULTILINE | re.IGNORECASE,
+                )
+                if url_match is None:
+                    continue
+                url = url_match.group(1).rstrip(".,;:!?")
+                identifier = _github_repository_identifier(url)
+                if not identifier or identifier in seen:
+                    continue
+                title_match = re.search(
+                    r"^- Page Title:\s*(.+)$",
+                    excerpt,
+                    re.MULTILINE | re.IGNORECASE,
+                )
+                title = (
+                    title_match.group(1).strip()
+                    if title_match is not None
+                    else identifier
+                )
+                title = re.sub(r"^GitHub\s*-\s*", "", title).strip()
+                title = re.sub(r"\s*[·|-]\s*GitHub\s*$", "", title).strip()
+                repositories.append((identifier, url, title[:320]))
+                seen.add(identifier)
+            if len(repositories) >= max(1, self.minimum_detail_sources):
+                polish = "pol" in language.casefold()
+                if polish:
+                    lines = [
+                        "Mam to, Boss. Zweryfikowane kandydatury z GitHuba:",
+                    ]
+                    for identifier, url, title in repositories:
+                        lines.append(f"- `{identifier}` — {title}. Źródło: {url}")
+                    lines.append(
+                        "Niczego jeszcze nie instalowałam ani nie przyswajałam. "
+                        "Wybierz repozytoria, które zatwierdzasz."
+                    )
+                else:
+                    lines = [
+                        "Got it, Boss. Verified GitHub candidates:",
+                    ]
+                    for identifier, url, title in repositories:
+                        lines.append(f"- `{identifier}` — {title}. Source: {url}")
+                    lines.append(
+                        "I haven't installed or adopted anything yet. Pick the "
+                        "repositories you approve."
+                    )
+                return "\n".join(lines)
 
         if "full_tor_inventory" in self.required_tools:
             for call in reversed(calls):

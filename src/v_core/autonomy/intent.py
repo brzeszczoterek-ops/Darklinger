@@ -340,7 +340,10 @@ Rules:
   when no subject was supplied. Stored topic memory must otherwise remain dormant.
 - required_public_fields contains standardized fields explicitly requested from
   public online information: count, address, contact, opening_hours. Map the
-  user's meaning to these labels regardless of language. Do not add an unasked field.
+  user's meaning to these labels regardless of language. ``address`` means a
+  physical or postal location only. A URL, domain, website address, onion
+  address, network endpoint, or an online service's address is not this field.
+  Do not add an unasked field.
 - public_field_evidence contains, for every field label, the shortest exact
   verbatim phrase from current_user_message that requests that field. Use an
   empty string when the field was not requested. A field without a matching
@@ -676,16 +679,16 @@ class SemanticIntent:
                 f"{prompt}\n{self.web_query}" if self.web_query else prompt
             )
         )
-        distinct_detail_page = (
-            browser
-            and (
-                self.distinct_detail_page
-                or (web_discovery and self.requires_report)
-            )
-        )
+        # A report is not automatically a deep-research job.  A current value,
+        # status, score, or similarly narrow lookup can be grounded directly by
+        # the discovery result.  The semantic router must opt into a distinct
+        # detail page when the requested facts actually require one.
+        distinct_detail_page = browser and self.distinct_detail_page
         return TaskContract(
             requires_browser_navigation=browser,
-            requires_browser_snapshot=browser,
+            requires_browser_snapshot=(
+                browser and (not web_discovery or distinct_detail_page)
+            ),
             requires_web_discovery=web_discovery,
             requires_distinct_detail_page=distinct_detail_page,
             minimum_detail_sources=(

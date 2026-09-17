@@ -3,6 +3,15 @@
 ## Unreleased
 
 ### Added
+- A shared outcome-based content contract now separates operational real-world
+  harm from fiction, research, journalism, defensive analysis, and other safe
+  adjacent work. Public keeps restricted generated-code authority; Full adds a
+  capability ledger that records sensitive tool and skill primitives, creation
+  origin, validation evidence, and owner-review status.
+- Local and network tool audits now distinguish schema completeness, functional
+  execution, live-network coverage, failures, and cases that were not tested.
+  The Full Owner Deck surfaces sensitive capability assessments without copying
+  generated source into the audit record.
 - Source-only tool creation now accepts an explicit, immutable JSON
   `tool_contract`, isolates code-generation context from stale chat claims, and
   provides bounded runtime rejection feedback for repair attempts. A synthetic
@@ -18,6 +27,18 @@
   A report request cannot complete on an unobserved search candidate.
 
 ### Fixed
+- GitHub research requests now require observed repository pages, preserve exact
+  `owner/repository` identifiers, keep articles as supporting evidence rather
+  than candidates, and stop before installing anything until Boss approves the
+  list. Browser batches capture each page before navigating away.
+- Agent completion now rejects unsupported execution claims, stale results,
+  fabricated repository identifiers, and successful-but-stagnant tool loops.
+  Multi-file reads retain every required path, while ambiguous or missing files
+  produce bounded, evidence-based outcomes instead of guesses.
+- Generated-tool creation now keeps immutable fixtures and expected results,
+  records failed attempts as learning evidence, permits a materially changed
+  implementation to start a fresh bounded attempt, and reports the exact point
+  at which creation or validation stopped.
 - Empty generated-source responses now count as recorded draft failures and
   receive bounded repair attempts. They no longer end the loop with a misleading
   32-step exhaustion report. Rejection evidence includes the provider finish
@@ -64,6 +85,11 @@
   reserved for an explicit CAPTCHA, private window, or interactive session.
 
 ### Verification scope
+- On 2026-09-17, 1083 Full and 1010 freshly exported Public tests passed. A
+  fresh Mythos run searched GitHub, opened and captured two repository pages,
+  returned their exact identifiers as approval candidates, excluded unrelated
+  articles, and installed nothing. PALADYN, the model, and the monitor were
+  stopped cleanly after the trial.
 - On 2026-09-16, 1012 Full and 943 freshly exported Public tests passed. An isolated replay of a previously
   failed live HAR draft passed sandbox validation, a separate final input, an
   unseen input, and execution after loading a fresh runtime using the corrected
