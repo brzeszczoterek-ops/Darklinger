@@ -153,6 +153,8 @@ class VCore:
         on_token: Callable[[str], None] | None = None,
     ) -> str:
 
+        if prompt.strip().startswith("/feedback") or prompt.strip() == "/inference-memory":
+            return await self.agent.run(prompt, on_token=on_token)
         task_kind = classify_model_phase(prompt)
         inference = getattr(self.llm, "inference", None)
         if inference is not None:

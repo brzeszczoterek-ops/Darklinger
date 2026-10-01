@@ -75,6 +75,11 @@ _INTENT_RESPONSE_FORMAT: dict[str, Any] = {
                 },
                 "recall_memory": {"type": "boolean"},
                 "memory_query": {"type": "string", "maxLength": 220},
+                "retain_memory": {"type": "boolean"},
+                "retain_memory_evidence": {
+                    "type": "string",
+                    "maxLength": 200,
+                },
                 "required_public_fields": {
                     "type": "array",
                     "items": {"type": "string", "enum": sorted(_PUBLIC_FIELDS)},
@@ -156,6 +161,8 @@ _INTENT_RESPONSE_FORMAT: dict[str, Any] = {
                 "delegates_test_target_evidence",
                 "recall_memory",
                 "memory_query",
+                "retain_memory",
+                "retain_memory_evidence",
                 "required_public_fields",
                 "public_field_evidence",
                 "public_subject",
@@ -229,6 +236,7 @@ Return exactly one JSON object with this shape:
 "generated_tool_archetype":"none","generated_tool_archetype_evidence":"",
 "delegates_test_target":false,"delegates_test_target_evidence":"",
 "recall_memory":false,"memory_query":"",
+"retain_memory":false,"retain_memory_evidence":"",
 "required_public_fields":[],
 "public_field_evidence":{"address":"","contact":"","count":"","opening_hours":""},
 "public_subject":"",
@@ -338,6 +346,13 @@ Rules:
   Merely asking a new question on a similar domain is false. memory_query is a
   short English subject phrase naming what should be recalled, or an empty string
   when no subject was supplied. Stored topic memory must otherwise remain dormant.
+- retain_memory is true only when the current message explicitly asks V to save
+  or remember new information, or directly states a durable preference, boundary,
+  identity/relationship fact, or standing working rule that will matter in later
+  conversations. Ordinary opinions, banter, status remarks, one-off reactions,
+  and explanations are false. retain_memory_evidence is the shortest exact
+  verbatim phrase from current_user_message that establishes the durable item.
+  Never translate, paraphrase, or copy evidence from earlier dialogue.
 - required_public_fields contains standardized fields explicitly requested from
   public online information: count, address, contact, opening_hours. Map the
   user's meaning to these labels regardless of language. ``address`` means a
@@ -434,6 +449,8 @@ class SemanticIntent:
     delegates_test_target_evidence: str = ""
     recall_memory: bool = False
     memory_query: str = ""
+    retain_memory: bool = False
+    retain_memory_evidence: str = ""
     required_public_fields: tuple[str, ...] = ()
     public_field_evidence: tuple[tuple[str, str], ...] = ()
     public_subject: str = ""
@@ -597,6 +614,13 @@ class SemanticIntent:
         memory_query = " ".join(str(payload.get("memory_query", "")).split())[:220]
         if not recall_memory:
             memory_query = ""
+        retain_memory = payload.get("retain_memory") is True
+        retain_memory_evidence = " ".join(
+            str(payload.get("retain_memory_evidence", "")).split()
+        )[:200]
+        if not retain_memory or not retain_memory_evidence:
+            retain_memory = False
+            retain_memory_evidence = ""
         explicit_action = payload.get("action_requested") is True and bool(
             capabilities
         )
@@ -640,6 +664,8 @@ class SemanticIntent:
             )[:200],
             recall_memory=recall_memory,
             memory_query=memory_query,
+            retain_memory=retain_memory,
+            retain_memory_evidence=retain_memory_evidence,
             required_public_fields=public_fields,
             public_field_evidence=public_field_evidence,
             public_subject=public_subject,
@@ -1082,6 +1108,44 @@ class MultilingualIntentRouter:
             ),
         )
 
+    def _ground_retain_memory(
+        self,
+        intent: SemanticIntent | None,
+        prompt: str,
+    ) -> SemanticIntent | None:
+        """Require exact current-turn evidence for durable memory processing.
+
+        Session dialogue is always recorded by the agent.  This flag controls
+        only the expensive reflection/learning/proposal pipeline, so a stale or
+        invented classifier label must fail closed without losing the visible
+        conversation history.
+        """
+
+        if intent is None or not intent.retain_memory:
+            return intent
+        grounded = bool(
+            intent.retain_memory_evidence
+            and self._text_grounded_in_current_message(
+                intent.retain_memory_evidence,
+                prompt,
+            )
+        )
+        if grounded:
+            return intent
+        self.last_sanitization_reason = ",".join(
+            item
+            for item in (
+                self.last_sanitization_reason,
+                "ungrounded_retain_memory",
+            )
+            if item
+        )
+        return replace(
+            intent,
+            retain_memory=False,
+            retain_memory_evidence="",
+        )
+
     @staticmethod
     def _text_grounded_in_current_message(candidate: str, prompt: str) -> bool:
         """Reject a prior-task subject copied into an unrelated new message."""
@@ -1177,7 +1241,12 @@ class MultilingualIntentRouter:
             )
         )
 
-    async def extract_tor_inventory_limits(
+    async def extract_tor_inventory_limits(self, prompt: str) -> tuple[int, int] | None:
+        from ..model_loader.outcome_runtime import auxiliary_inference
+        with auxiliary_inference():
+            return await self._extract_tor_inventory_limits(prompt)
+
+    async def _extract_tor_inventory_limits(
         self,
         prompt: str,
     ) -> tuple[int, int] | None:
@@ -1231,6 +1300,13 @@ class MultilingualIntentRouter:
         return max_pages, max_depth
 
     async def classify(
+        self, prompt: str, *, previous_context: dict[str, Any] | None = None,
+    ) -> SemanticIntent | None:
+        from ..model_loader.outcome_runtime import auxiliary_inference
+        with auxiliary_inference():
+            return await self._classify(prompt, previous_context=previous_context)
+
+    async def _classify(
         self,
         prompt: str,
         *,
@@ -1267,11 +1343,14 @@ class MultilingualIntentRouter:
             response_format=_INTENT_RESPONSE_FORMAT,
         )
         self.last_response = response
-        intent = self._ground_public_fields(
-            self._ground_generated_tool_delegation(
-                self._ground_local_file_capabilities(
-                    self._ground_runtime_review(
-                        SemanticIntent.parse(response),
+        intent = self._ground_retain_memory(
+            self._ground_public_fields(
+                self._ground_generated_tool_delegation(
+                    self._ground_local_file_capabilities(
+                        self._ground_runtime_review(
+                            SemanticIntent.parse(response),
+                            prompt,
+                        ),
                         prompt,
                     ),
                     prompt,
@@ -1315,11 +1394,14 @@ class MultilingualIntentRouter:
             response_format=_INTENT_RESPONSE_FORMAT,
         )
         self.last_response = retry
-        retried_intent = self._ground_public_fields(
-            self._ground_generated_tool_delegation(
-                self._ground_local_file_capabilities(
-                    self._ground_runtime_review(
-                        SemanticIntent.parse(retry),
+        retried_intent = self._ground_retain_memory(
+            self._ground_public_fields(
+                self._ground_generated_tool_delegation(
+                    self._ground_local_file_capabilities(
+                        self._ground_runtime_review(
+                            SemanticIntent.parse(retry),
+                            prompt,
+                        ),
                         prompt,
                     ),
                     prompt,

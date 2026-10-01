@@ -99,11 +99,9 @@ uses reviewed presets and selects them from the runtime-owned task kind:
 - `research` and `document` balance fidelity with readable synthesis;
 - `balanced` is the fallback for an unclassified task.
 
-Full adds the private `full_tune_inference` tool. The persona may choose a
-preset and override supported request-time controls for the current turn or
-session. It may also stage context size, GPU/CPU allocation, batching, parallel
-slots, Flash Attention, reasoning, template, anti-repetition and cache settings.
-Server settings are range-checked immediately and consumed once at the next safe
-model boundary. The runtime stops the current server, starts the validated
-profile and restores the prior profile if startup fails. Boundary flags such as
-model path, host, port, API key and offline mode remain executor-owned.
+
+## Persistent outcome memory
+
+Qualified routing and request sampling can use versioned runtime outcome history.
+See [Inference outcome memory](docs/inference-outcome-memory.md) for the evidence
+contract, Full/Public boundaries, thresholds, rollback and inspection commands.

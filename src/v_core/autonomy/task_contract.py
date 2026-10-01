@@ -480,7 +480,9 @@ def _github_repository_identifier(value: str) -> str:
     return f"{owner}/{repository}"
 
 
-def _claimed_github_repository_identifiers(answer: str) -> set[str]:
+def _claimed_github_repository_identifiers(
+    answer: str, *, repository_context: bool = False,
+) -> set[str]:
     """Extract repository claims without treating arbitrary prose paths as repos."""
 
     claims = {
@@ -496,12 +498,18 @@ def _claimed_github_repository_identifiers(answer: str) -> set[str]:
         }
         if not identifiers:
             continue
-        line_folded = line.casefold()
+        # A bullet is formatting, not proof that a slash denotes owner/repo.
+        # In particular, ordinary prose such as buying/selling must not cause
+        # an otherwise grounded explanation to be discarded.
         if (
-            "github" in line_folded
-            or "repo" in line_folded
-            or line.lstrip().startswith(("-", "*"))
-            or re.match(r"\s*\d{1,3}[.)]\s", line)
+            re.search(r"\b(?:github|repos?|repositories|repository)\b", line, re.I)
+            or (
+                repository_context
+                and re.match(
+                    r"\s*(?:[-*]|\d{1,3}[.)])\s+[*`]*[\w.-]+/[\w.-]+",
+                    line,
+                )
+            )
         ):
             claims.update(identifiers)
     return claims
@@ -512,6 +520,12 @@ def _grounding_entity_is_present(entity: str, grounding_text: str) -> bool:
 
     normalized = entity.casefold()
     if normalized in grounding_text:
+        return True
+    # A missing space in an otherwise source-backed CamelCase phrase is not
+    # a new entity (e.g. ProtectYour in a copied page title). Require the exact
+    # adjacent source words, not just independent occurrences of both tokens.
+    spaced = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", entity).casefold()
+    if spaced != normalized and spaced in grounding_text:
         return True
     # Product and protocol names are frequently pluralized in natural prose
     # while source pages use the singular label (CAPTCHAs vs CAPTCHA). This is
@@ -2011,7 +2025,11 @@ class TaskContract:
                 if (identifier := _github_repository_identifier(url))
             }
             claimed_repository_identifiers = (
-                _claimed_github_repository_identifiers(answer)
+                _claimed_github_repository_identifiers(
+                    answer,
+                    repository_context=bool(observed_repository_identifiers)
+                    or "github_repositories" in self.required_research_facets,
+                )
             )
             ungrounded_repository_identifiers = sorted(
                 claimed_repository_identifiers
@@ -2042,7 +2060,8 @@ class TaskContract:
                 structural_label = bool(
                     re.fullmatch(
                         r"\s*(?:step\s+\d+|conclusion|summary|result|source|"
-                        r"finding|findings|next\s+steps?)\s*:?[\s]*",
+                        r"finding|findings|next\s+steps?|(?:final\s+)?answer|"
+                        r"(?:source\s+)?evidence|excerpt|unverified|limitations)\s*:?[\s]*",
                         phrase,
                         flags=re.IGNORECASE,
                     )
@@ -2078,6 +2097,11 @@ class TaskContract:
                     # online product/entity claim that needs source grounding.
                     continue
                 line_prefix = answer[: match.start()].rsplit("\n", 1)[-1]
+                if re.fullmatch(r"\s*(?:[-*]|\d{1,3}[.)])\s+", line_prefix):
+                    # Sentence-initial capitalization after a list marker is
+                    # formatting, just like capitalization after a newline.
+                    # Named entities in emphasis are still checked above.
+                    continue
                 if re.match(r"\s{0,3}#{1,6}\s", line_prefix):
                     # Markdown headings are discourse structure. Words such as
                     # "Step" and "Capture" are not online entity claims.

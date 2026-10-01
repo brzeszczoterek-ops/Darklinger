@@ -167,7 +167,12 @@ same presets and additionally lets the active persona tune supported sampling
 controls for one turn or the current session. Full may also stage validated
 server settings, including context size and reasoning mode; those changes are
 applied only at the next safe model boundary because they require a controlled
-server restart. Public never accepts arbitrary parameter overrides.
+server restart. A Full model profile's temperature and top-p are the fallback
+for the `balanced` profile only; named task presets take precedence. Public
+never accepts arbitrary parameter overrides. Verified task outcomes can adapt
+qualified model/configuration selection conservatively; the evidence contract,
+thresholds, rollback behavior, privacy boundary, and inspection commands are
+documented in [docs/inference-outcome-memory.md](docs/inference-outcome-memory.md).
 
 ## Local voice conversation
 
@@ -379,12 +384,6 @@ Ubuntu policy. Isolation of generated code is still enforced inside Bubblewrap.
 Task artifacts are restricted to their authorized runtime workspace. The
 `client` profile requires a validated lesson and two owner-approved capabilities
 before persistent promotion, and applies a restricted generated-Python policy.
-`DARKLINGER_LEARNING_PROFILE=owner_lab` pre-authorizes persistent promotion and
-privileged generated code: V may use arbitrary Python imports, file operations,
-subprocesses, and dynamic execution inside the isolated sandbox without pausing
-for per-tool approval. Validation, exact tests, resource limits, auditing,
-kill-switch control, and the protected DARKLINGER core remain enforced.
-
 
 Inspect the learning store with:
 

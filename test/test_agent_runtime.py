@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import stat
+import tomllib
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -51,7 +52,10 @@ import v_core.main as main_module
 
 
 def test_public_version_matches_release() -> None:
-    assert v_core.__version__ == "3.9"
+    metadata = tomllib.loads(
+        (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    assert v_core.__version__ == metadata["project"]["version"]
 
 
 def test_tool_request_accepts_structured_json() -> None:
@@ -1461,6 +1465,8 @@ async def test_long_non_action_dialogue_uses_chat_not_agent_tools(
                 message_clear=True,
                 action_requested=False,
                 references_previous=True,
+                retain_memory=True,
+                retain_memory_evidence="DARKLINGER is the program you are in right now",
             )
 
     class ToolsStub:
@@ -1517,6 +1523,57 @@ async def test_long_non_action_dialogue_uses_chat_not_agent_tools(
     assert checkpoint is not None
     assert checkpoint["status"] == "completed"
     assert checkpoint["tool_calls"] == []
+
+
+@pytest.mark.asyncio
+async def test_semantic_compact_chat_skips_expensive_memory_without_durable_fact(
+    tmp_path: Path,
+) -> None:
+    prompt = "Cześć V, jak ci mija wieczór i co sądzisz o dzisiejszym tempie pracy?"
+
+    class IntentRouterStub:
+        last_sanitization_reason = ""
+
+        async def classify(self, *args, **kwargs) -> SemanticIntent:
+            return SemanticIntent(
+                message_clear=True,
+                action_requested=False,
+                retain_memory=False,
+            )
+
+    class ToolsStub:
+        def begin_interaction(self, interaction_id: str, text: str) -> None:
+            return None
+
+        async def openai_tool_definitions(self) -> list[dict]:
+            raise AssertionError("ordinary dialogue must not discover tools")
+
+    class LLMStub:
+        async def ask(self, **kwargs) -> str:
+            return "Evening's moving fast, Boss. The pace is useful, but brutally expensive."
+
+    class MemoryStub:
+        def __init__(self) -> None:
+            self.session = Session()
+            self.relationship_state = RelationshipState()
+
+        async def process(self, *args, **kwargs) -> None:
+            raise AssertionError("ordinary compact chat must not start memory models")
+
+    agent = object.__new__(Agent)
+    agent.intent_router = IntentRouterStub()
+    agent.tools = ToolsStub()
+    agent.llm = LLMStub()
+    agent.memory = MemoryStub()
+    agent.persona = PersonaRuntime(identity=IdentityKernel(), voice=VoiceProfile())
+    agent._agent_trace_root = tmp_path
+    agent._last_execution_context = None
+
+    answer = await agent._run_agent_loop(prompt)
+
+    assert "brutally expensive" in answer
+    assert len(agent.memory.session) == 1
+    assert not getattr(agent, "_memory_tasks", set())
 
 
 @pytest.mark.asyncio
@@ -2708,14 +2765,14 @@ async def test_contract_finalization_blocks_identical_calls_before_continuous_mo
     await asyncio.gather(*agent._memory_tasks)
 
     assert "I killed that loop" in answer
-    assert "runtime-verified result" in answer
+    assert "requested answer is not complete" in answer
     assert tools.calls == 1
     assert agent.llm.calls == 3
     checkpoint = next(
         (agent._agent_trace_root / "checkpoints").glob("*.json")
     )
     payload = json.loads(checkpoint.read_text(encoding="utf-8"))
-    assert payload["status"] == "completed"
+    assert payload["status"] == "blocked"
     journal = (
         agent._agent_trace_root / "journal" / f"{payload['task_id']}.jsonl"
     ).read_text(encoding="utf-8")

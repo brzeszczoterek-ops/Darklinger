@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .models import ModelProfile
-from .qualification import ModelQualificationCard
+from .qualification import ModelQualificationCard, model_file_fingerprint, model_profile_fingerprint
 from .router import (
     ModelRouteCandidate,
     ModelRouteDecision,
@@ -57,8 +57,19 @@ class RoutedModelRuntime:
         self.status = status
         self.allow_manual_hierarchy = bool(allow_manual_hierarchy)
         self.router = ModelRouter()
+        inference = getattr(llm, "inference", None)
+        if inference is not None:
+            inference.identity_provider = self._outcome_identity
         self._journal_path = self.runtime_root / "routing.jsonl"
         self._last_unavailable_notice = ""
+
+    def _outcome_identity(self):
+        profile = self.session.profile
+        state = self.store.load()
+        card = state.qualifications.get(self.active_model_path)
+        qualified = card is not None and not card.stale_reasons(Path(self.active_model_path), profile)
+        return (model_file_fingerprint(Path(self.active_model_path)),
+                model_profile_fingerprint(profile), qualified)
 
     @property
     def active_model_path(self) -> str:
@@ -83,6 +94,8 @@ class RoutedModelRuntime:
                 inference.select_profile(
                     inference.profile_for_task(requested_task_kind)
                 )
+        if inference is not None:
+            inference.task_kind = requested_task_kind
         server_tuning = (
             inference.consume_server_tuning()
             if inference is not None
@@ -138,6 +151,16 @@ class RoutedModelRuntime:
             return result
 
         self._last_unavailable_notice = ""
+        from .performance import task_context
+        outcome_store = getattr(inference, "outcome_store", None)
+        adjustments = {}
+        if outcome_store is not None:
+            for candidate in candidates:
+                adjustments[candidate.model_path] = outcome_store.model_adjustment(
+                    task_kind=requested_task_kind, context=task_context(prompt),
+                    model_fingerprint=candidate.card.model_fingerprint,
+                    server_profile_fingerprint=candidate.card.profile_fingerprint,
+                    edition=inference.edition_name)
         decision = self.router.choose(
             prompt,
             candidates,
@@ -145,6 +168,7 @@ class RoutedModelRuntime:
             task_kind=requested_task_kind,
             strategy=routing_strategy,
             excluded_model_paths=excluded_model_paths,
+            outcome_adjustments=adjustments,
         )
         if decision is None or decision.selected_model_path == previous:
             if server_tuning is not None:
@@ -200,6 +224,17 @@ class RoutedModelRuntime:
             )
         )
         previous_profile = self.session.profile
+        if server_tuning is not None:
+            try:
+                for path in ordered:
+                    profile = profiles.get(path, previous_profile if path == previous else None)
+                    if profile is not None:
+                        ModelProfile.from_dict({**profile.to_dict(), **server_tuning.values()})
+            except (ValueError, TypeError) as error:
+                result = ModelSwitchResult(decision, previous, previous, False,
+                    (f"model tuning rejected before restart: {error}",), requested_task_kind=requested_task_kind)
+                self._record(prompt, result, trigger=trigger)
+                return result
         await self.session.stop()
         failures: list[str] = []
         for path in ordered:
@@ -245,7 +280,7 @@ class RoutedModelRuntime:
             if path != previous:
                 self.status(
                     f"V routed this {decision.task_kind} task to "
-                    f"{Path(path).name} (verified score {decision.score}/100)."
+                    f"{Path(path).name} (routing score {decision.score}/100)."
                 )
             self._record(prompt, result, trigger=trigger)
             return result
@@ -270,7 +305,13 @@ class RoutedModelRuntime:
     ) -> ModelSwitchResult:
         previous = self.active_model_path
         original = self.session.profile
-        tuned = ModelProfile.from_dict({**original.to_dict(), **values})
+        try:
+            tuned = ModelProfile.from_dict({**original.to_dict(), **values})
+        except (ValueError, TypeError) as error:
+            result = ModelSwitchResult(decision, previous, previous, False,
+                (f"model tuning rejected before restart: {error}",), requested_task_kind=task_kind)
+            self._record(prompt, result, trigger=trigger)
+            return result
         if tuned == original:
             result = ModelSwitchResult(
                 decision,
@@ -301,6 +342,7 @@ class RoutedModelRuntime:
             self._record(prompt, result, trigger=trigger)
             return result
         await self.session.stop()
+        session = None
         try:
             session = await start_llama_server(
                 binary,
@@ -311,6 +353,8 @@ class RoutedModelRuntime:
             await self.llm.reconfigure()
         except Exception as error:
             # A tuning failure must not strand Darklinger without its model.
+            if session is not None:
+                await session.stop()
             restored = await start_llama_server(
                 binary,
                 original,
@@ -380,6 +424,10 @@ class RoutedModelRuntime:
         current qualification cards for the same task class.
         """
 
+        from .outcome_runtime import current_run
+        outcome_run = current_run()
+        if outcome_run is not None:
+            outcome_run.reject_last()
         rejected = self.active_model_path
         excluded = tuple(
             dict.fromkeys((*tuple(excluded_model_paths), rejected))
@@ -451,6 +499,9 @@ class RoutedModelRuntime:
             "switched": result.switched,
             "score": result.decision.score if result.decision else 0,
             "failures": list(result.failures),
+            "reason": result.decision.reason if result.decision else "no eligible route",
+            "outcome_adjustments": dict(result.decision.outcome_adjustments) if result.decision else {},
+            "policy_version": result.decision.policy_version if result.decision else 1,
         }
         descriptor = os.open(
             self._journal_path,

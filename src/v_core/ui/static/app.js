@@ -41,11 +41,6 @@ const ui = {
   liveObjective: byId("live-objective"),
   liveAction: byId("live-action"),
   ownerDeck: byId("owner-deck"),
-  ownerTitle: byId("owner-title"),
-  ownerSubtitle: byId("owner-subtitle"),
-  ownerCards: byId("owner-cards"),
-  ownerCapabilities: byId("owner-capabilities"),
-  foundry: byId("foundry-state"),
   capabilityAuditList: byId("capability-audit-list"),
   proposalList: byId("proposal-list"),
   shutdown: byId("shutdown"),
@@ -195,21 +190,7 @@ function renderOwner(owner) {
     return;
   }
   ui.ownerDeck.classList.remove("hidden");
-  ui.ownerTitle.textContent = owner.title || "OWNER DECK";
-  ui.ownerSubtitle.textContent = owner.subtitle || "Private operational surface";
-  ui.ownerCards.replaceChildren();
-  (owner.cards || []).forEach((item) => {
-    const card = document.createElement("div");
-    card.className = "owner-card";
-    const label = document.createElement("span");
-    const value = document.createElement("strong");
-    label.textContent = item.label;
-    value.textContent = item.value;
-    card.append(label, value);
-    ui.ownerCards.append(card);
-  });
-  renderChips(ui.ownerCapabilities, owner.capabilities || [], 10);
-  ui.foundry.textContent = `FOUNDRY // ${owner.foundry || "unavailable"}`;
+  byId("proposal-count").textContent = `(${(owner.proposals || []).length})`;
   ui.capabilityAuditList.replaceChildren();
   (owner.capability_audits || []).forEach((audit) => {
     const row = document.createElement("article");
@@ -276,6 +257,7 @@ async function refreshStatus() {
     const response = await fetch("/api/status", {headers, cache: "no-store"});
     if (!response.ok) throw new Error(`status ${response.status}`);
     const state = await response.json();
+    if (state.closing) showShutdown(state.memoir);
     ui.edition.textContent = state.edition.toUpperCase();
     ui.modelAlias.textContent = state.model.alias;
     ui.modelFile.textContent = state.model.filename || state.model.state;
@@ -299,8 +281,8 @@ async function refreshStatus() {
     }
   } catch (error) {
     ui.runtime.className = "status-pill";
-    ui.runtime.innerHTML = "<i></i> LINK LOST";
-    ui.entity.textContent = "CONNECTION LOST";
+    ui.runtime.innerHTML = shuttingDown ? "<i></i> STOPPED" : "<i></i> LINK LOST";
+    ui.entity.textContent = shuttingDown ? "CLOSED" : "CONNECTION LOST";
   }
 }
 
@@ -433,25 +415,171 @@ window.addEventListener("keydown", (event) => {
   }
 });
 
-let killTimer = null;
-function disarmKill() {
-  clearTimeout(killTimer);
-  killTimer = null;
-  ui.shutdown.classList.remove("arming");
+let shuttingDown = false;
+function showShutdown(memoir = {}) {
+  const notice = byId("shutdown-notice");
+  notice.classList.remove("hidden");
+  if (memoir.state === "saved") {
+    notice.textContent = `${memoir.fallback ? "Zapisano notatkę zastępczą" : "Zapisano wspomnienie"}: ${memoir.file}. Zamykanie…`;
+  } else if (memoir.state === "error") notice.textContent = memoir.message;
+  else notice.textContent = "V zapisuje wspomnienie tej sesji (maks. 60 sekund). Awaryjny stop pomija ten zapis.";
 }
-function armKill() {
-  if (killTimer) return;
-  ui.shutdown.classList.add("arming");
-  killTimer = setTimeout(async () => {
-    feed("Shutdown requested — stopping model and V");
-    await fetch("/api/shutdown", {method: "POST", headers: jsonHeaders, body: "{}"});
-    ui.shutdown.textContent = "STOPPING";
-  }, 1000);
+async function shutdown(emergency = false) {
+  if (shuttingDown && !emergency) return;
+  shuttingDown = true;
+  ui.shutdown.disabled = true;
+  try {
+    const result = await api(`/api/shutdown${emergency ? "?emergency=1" : ""}`, {});
+    showShutdown();
+    if (result.status === "shutting_down") byId("shutdown-notice").textContent = "Zamykanie Darklingera i modelu…";
+  } catch (error) {
+    feed(`Nie udało się zamknąć: ${error.message}`);
+    shuttingDown = false;
+    ui.shutdown.disabled = false;
+  }
 }
-ui.shutdown.addEventListener("pointerdown", armKill);
-ui.shutdown.addEventListener("pointerup", disarmKill);
-ui.shutdown.addEventListener("pointerleave", disarmKill);
-ui.shutdown.addEventListener("pointercancel", disarmKill);
+ui.shutdown.addEventListener("click", () => shutdown());
+byId("emergency-stop").addEventListener("click", () => {
+  if (window.confirm("Zatrzymać natychmiast, bez wspomnienia sesji?")) shutdown(true);
+});
+
+async function api(path, body) {
+  const response = await fetch(path, body === undefined
+    ? {headers, cache: "no-store"}
+    : {method: "POST", headers: jsonHeaders, body: JSON.stringify(body)});
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+  return result;
+}
+
+let logPaused = false;
+let logBusy = false;
+byId("log-pause").addEventListener("click", () => {
+  logPaused = !logPaused;
+  byId("log-pause").textContent = logPaused ? "Wznów" : "Pauza";
+  byId("log-pause").setAttribute("aria-pressed", String(logPaused));
+  if (!logPaused) refreshLog();
+});
+async function refreshLog() {
+  if (logPaused || logBusy) return;
+  logBusy = true;
+  try {
+    const result = await api("/api/model/log");
+    byId("log-source").textContent = result.source || "Backend bez lokalnego logu";
+    const console = byId("model-log");
+    if (console.textContent !== result.text) {
+      const position = console.scrollTop;
+      console.textContent = result.text || "Log jest jeszcze pusty.";
+      console.scrollTop = byId("log-follow").checked ? console.scrollHeight : position;
+    }
+  } catch (error) { byId("log-source").textContent = `Log niedostępny: ${error.message}`; }
+  finally { logBusy = false; }
+}
+
+const voiceDialog = byId("voice-settings-dialog");
+let voiceBusy = false;
+let voiceInstalling = false;
+let installerWasBusy = false;
+function voiceMessage(text) { byId("voice-settings-message").textContent = text; }
+function options(id, items, value) {
+  const select = byId(id);
+  select.replaceChildren();
+  if (!items.length) items = [{id: "", label: "Brak — zainstaluj lub skonfiguruj najpierw"}];
+  else if (!items.some((item) => item.id === value)) items = [{id: "", label: "Bieżący wybór niedostępny — wybierz z listy"}, ...items];
+  for (const item of items) select.add(new Option(item.label, item.id));
+  select.value = items.some((item) => item.id === value) ? value : "";
+}
+function renderVoice(state, replace = false) {
+  voiceInstalling = state.installing;
+  if (replace) {
+    options("voice-choice", state.voices, state.selected.voice);
+    options("whisper-engine", state.engines, state.selected.engine);
+    options("whisper-model", state.models, state.selected.model);
+    byId("whisper-language").value = state.selected.language;
+    byId("whisper-threads").value = state.selected.threads;
+    const downloads = byId("whisper-downloads");
+    downloads.replaceChildren();
+    for (const item of state.downloads) {
+      const row = document.createElement("div");
+      row.className = "download-row";
+      const label = document.createElement("span");
+      label.textContent = `${item.label} · ${Math.round(item.bytes / 1024 / 1024)} MiB`;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "utility-button";
+      button.textContent = item.installed ? "Zainstalowany" : "Pobierz";
+      button.dataset.installed = String(item.installed);
+      button.addEventListener("click", () => installVoice("model", item.id,
+        `Pobrać ${item.label} (${Math.round(item.bytes / 1024 / 1024)} MiB) z Hugging Face?`));
+      row.append(label, button);
+      downloads.append(row);
+    }
+  }
+  byId("voice-save").disabled = state.installing;
+  byId("whisper-install-engine").disabled = state.installing || state.cpu_engine_installed;
+  byId("whisper-install-engine").textContent = state.cpu_engine_installed ? "whisper.cpp CPU zainstalowany" : "Zainstaluj whisper.cpp CPU";
+  byId("whisper-downloads").querySelectorAll("button").forEach((button) => {
+    button.disabled = state.installing || button.dataset.installed === "true";
+  });
+  const job = state.job || {};
+  const progress = byId("voice-install-progress");
+  progress.classList.toggle("hidden", !state.installing);
+  byId("voice-install-cancel").classList.toggle("hidden", !state.installing);
+  if (job.total) progress.value = 100 * job.bytes / job.total;
+  else progress.removeAttribute("value");
+  byId("voice-install-status").textContent = job.state === "idle" ? "" :
+    `${job.state}: ${job.message || ""}${job.total ? `\n${Math.round(job.bytes / 1024 / 1024)} / ${Math.round(job.total / 1024 / 1024)} MiB` : ""}${job.detail ? `\n${job.detail}` : ""}`;
+}
+async function refreshVoice(replace = false) {
+  if (voiceBusy) return;
+  voiceBusy = true;
+  try {
+    const state = await api("/api/voice/settings");
+    renderVoice(state, replace || (installerWasBusy && !state.installing));
+    installerWasBusy = state.installing;
+  } catch (error) { voiceMessage(error.message); }
+  finally { voiceBusy = false; }
+}
+byId("voice-settings-open").addEventListener("click", () => {
+  voiceDialog.showModal();
+  voiceMessage("");
+  refreshVoice(true);
+});
+byId("voice-settings-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const payload = {language: byId("whisper-language").value, threads: Number(byId("whisper-threads").value)};
+  for (const [field, id] of [["voice", "voice-choice"], ["engine", "whisper-engine"], ["model", "whisper-model"]]) {
+    if (byId(id).value) payload[field] = byId(id).value;
+  }
+  try {
+    renderVoice(await api("/api/voice/settings", payload), true);
+    voiceMessage("Zapisano. Nowe ustawienia obowiązują od następnego nagrania lub wypowiedzi.");
+  } catch (error) { voiceMessage(error.message); }
+});
+byId("voice-preview").addEventListener("click", async () => {
+  byId("voice-preview").disabled = true;
+  voiceMessage("Odtwarzanie zapisanego głosu…");
+  try { await api("/api/voice/preview", {}); voiceMessage("Próbka zakończona."); }
+  catch (error) { voiceMessage(error.message); }
+  finally { byId("voice-preview").disabled = false; }
+});
+async function installVoice(kind, id, question) {
+  if (voiceInstalling || !window.confirm(question)) return;
+  try {
+    await api("/api/voice/install", {kind, id});
+    voiceMessage("Instalacja uruchomiona. Bieżące ustawienia pozostają bez zmian.");
+    await refreshVoice();
+  } catch (error) { voiceMessage(error.message); }
+}
+byId("whisper-install-engine").addEventListener("click", () => installVoice("engine", "cpu",
+  "Pobrać źródła whisper.cpp v1.8.3 z GitHub i zbudować silnik CPU lokalnie? Wymaga co najmniej 1 GB wolnego miejsca; może potrwać kilka minut."));
+byId("voice-install-cancel").addEventListener("click", async () => {
+  try { await api("/api/voice/install/cancel", {}); await refreshVoice(true); }
+  catch (error) { voiceMessage(error.message); }
+});
+setInterval(() => { if (voiceDialog.open || voiceInstalling) refreshVoice(); }, 1500);
+refreshLog();
+setInterval(refreshLog, 1500);
 
 refreshStatus();
 setInterval(refreshStatus, 2000);

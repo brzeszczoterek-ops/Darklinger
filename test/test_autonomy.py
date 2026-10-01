@@ -36,6 +36,29 @@ from v_core.capabilities.web_target import extract_web_target, extract_web_targe
 from v_core.config import load_config
 
 
+def test_durable_memory_intent_requires_current_message_evidence() -> None:
+    router = MultilingualIntentRouter(object())
+    prompt = "Pamiętaj, że wolę krótkie raporty po polsku."
+    grounded = router._ground_retain_memory(
+        SemanticIntent(
+            retain_memory=True,
+            retain_memory_evidence="wolę krótkie raporty po polsku",
+        ),
+        prompt,
+    )
+    assert grounded is not None and grounded.retain_memory
+
+    rejected = router._ground_retain_memory(
+        SemanticIntent(
+            retain_memory=True,
+            retain_memory_evidence="Boss zawsze wybiera czerwony interfejs",
+        ),
+        prompt,
+    )
+    assert rejected is not None and not rejected.retain_memory
+    assert "ungrounded_retain_memory" in router.last_sanitization_reason
+
+
 def test_task_contract_detects_polish_local_tool_and_required_use() -> None:
     contract = TaskContract.from_prompt(
         "Stwórz lokalne narzędzie count_words, a następnie użyj go."

@@ -623,10 +623,10 @@ def edit_profile(
         kv_cache_types,
     )
     values["temperature"] = _prompt_float(
-        input_fn, "Temperature", profile.temperature, 0.0, 5.0
+        input_fn, "Fallback temperature (adaptive task presets take precedence)", profile.temperature, 0.0, 5.0
     )
     values["top_p"] = _prompt_float(
-        input_fn, "Top-p", profile.top_p, 0.000001, 1.0
+        input_fn, "Fallback top-p (adaptive task presets take precedence)", profile.top_p, 0.000001, 1.0
     )
     values["port"] = _prompt_int(input_fn, "Local API port", profile.port, 1_024, 65_535)
     values["startup_timeout_seconds"] = _prompt_float(

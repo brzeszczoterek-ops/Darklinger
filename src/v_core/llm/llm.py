@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 import json
 import re
+from time import perf_counter
 from typing import Any
 
 from openai import APIStatusError, AsyncOpenAI
@@ -18,6 +19,16 @@ _TEXTUAL_TOOL_CALL = re.compile(
     r"<tool_call>\s*(\{.*\})\s*</tool_call>",
     re.DOTALL,
 )
+
+
+class IncompleteGenerationError(RuntimeError):
+    """The provider exhausted its output budget; partial output is not success."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Model output reached its token limit. The answer is incomplete; "
+            "no tool call from this incomplete response was executed."
+        )
 
 
 def repetition_start(text: str) -> int | None:
@@ -85,6 +96,10 @@ class LLM:
         self._api_key = api_key
         self.config = load_llm_config()
         self.inference = InferenceController()
+        self.inference.bind_model_defaults(
+            temperature=float(self.config.temperature),
+            top_p=float(self.config.top_p),
+        )
         self.client = self._new_client()
         # None means untested. A strict/older GGUF template may reject the
         # OpenAI tool schema; after one explicit provider rejection DARKLINGER
@@ -113,6 +128,10 @@ class LLM:
 
         previous = self.client
         self.config = config or load_llm_config()
+        self.inference.bind_model_defaults(
+            temperature=float(self.config.temperature),
+            top_p=float(self.config.top_p),
+        )
         self.client = self._new_client()
         self._native_tools_supported = None
         close = getattr(previous, "close", None)
@@ -120,6 +139,21 @@ class LLM:
             result = close()
             if hasattr(result, "__await__"):
                 await result
+
+    async def _measured_completion(self, request):
+        from ..model_loader.outcome_runtime import current_run
+        run = current_run()
+        snapshot = run.snapshot(request) if run is not None else None
+        started = perf_counter()
+        try:
+            response = await self.client.chat.completions.create(**request)
+        except BaseException:
+            if run is not None:
+                run.measure(snapshot, started, domain="environment")
+            raise
+        if run is not None:
+            run.measure(snapshot, started, response)
+        return response
 
     async def respond(
         self,
@@ -193,8 +227,14 @@ class LLM:
             request["tool_choice"] = tool_choice
             request["parallel_tool_calls"] = False
 
+        if controller is not None:
+            controller.adapt_request(request, explicit_temperature=temperature is not None)
+
+        from ..model_loader.outcome_runtime import current_run
+        measured_run = current_run()
+        previous_samples = len(measured_run.samples) if measured_run is not None else 0
         try:
-            response = await self.client.chat.completions.create(**request)
+            response = await self._measured_completion(request)
         except APIStatusError as error:
             # llama.cpp supports many chat templates. Some older templates
             # return a provider error when tools are present. Retry once as a
@@ -237,6 +277,11 @@ class LLM:
             # this particular generation was merely malformed or truncated.
             if template_rejection:
                 self._native_tools_supported = False
+            elif malformed_tool_arguments:
+                # A missing request identity may have suppressed this sample.
+                # Never relabel a previous request's observation in that case.
+                if measured_run is not None and len(measured_run.samples) > previous_samples:
+                    measured_run.reject_last(proven_provider_output=True)
             request.pop("tools", None)
             request.pop("tool_choice", None)
             if malformed_tool_arguments and not template_rejection:
@@ -260,7 +305,7 @@ class LLM:
                     ]
                 )
                 request["temperature"] = min(float(tuning.temperature), 0.1)
-            response = await self.client.chat.completions.create(**request)
+            response = await self._measured_completion(request)
             native_requested = False
         else:
             if native_requested:
@@ -338,6 +383,8 @@ class LLM:
             temperature=temperature,
             response_format=response_format,
         )
+        if response.finish_reason == "length":
+            raise IncompleteGenerationError()
         return response.content
 
     async def stream(
@@ -356,7 +403,7 @@ class LLM:
                 top_p=float(self.config.top_p),
             )
         )
-        response = await self.client.chat.completions.create(
+        request = dict(
             model=self.config.model,
             temperature=tuning.temperature,
             top_p=tuning.top_p,
@@ -374,22 +421,44 @@ class LLM:
             stream=True,
         )
 
-        generated = ""
-        async for chunk in response:
-            if not chunk.choices:
-                continue
-            content = getattr(chunk.choices[0].delta, "content", None)
-            if content:
-                candidate = generated + content
-                loop_start = repetition_start(candidate)
-                if loop_start is not None:
-                    if loop_start > len(generated):
-                        safe_tail = candidate[len(generated) : loop_start].rstrip()
-                        if safe_tail:
-                            yield safe_tail
-                    break
-                generated = candidate
-                yield content
+        if controller is not None:
+            controller.adapt_request(request)
+        from ..model_loader.outcome_runtime import current_run
+        run = current_run()
+        snapshot = run.snapshot(request) if run is not None else None
+        started = perf_counter()
+        domain = "none"
+
+        try:
+            response = await self.client.chat.completions.create(**request)
+            generated = ""
+            async for chunk in response:
+                if not chunk.choices:
+                    continue
+                if getattr(chunk.choices[0], "finish_reason", None) == "length":
+                    raise IncompleteGenerationError()
+                content = getattr(chunk.choices[0].delta, "content", None)
+                if content:
+                    candidate = generated + content
+                    loop_start = repetition_start(candidate)
+                    if loop_start is not None:
+                        if loop_start > len(generated):
+                            safe_tail = candidate[len(generated) : loop_start].rstrip()
+                            if safe_tail:
+                                yield safe_tail
+                        break
+                    generated = candidate
+                    yield content
+
+        except BaseException:
+            domain = "environment"
+            raise
+        finally:
+            if run is not None:
+                run.measure(snapshot, started, domain=domain)
+            close = getattr(locals().get("response"), "close", None)
+            if callable(close):
+                await close()
 
     @staticmethod
     def _normalize_system_messages(messages: list) -> list:

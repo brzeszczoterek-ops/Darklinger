@@ -9,6 +9,7 @@ import shutil
 from typing import Any
 
 from ..branding import env_value
+from .preferences import read_preferences
 
 
 class SpeechConfigurationError(RuntimeError):
@@ -83,7 +84,8 @@ class VoiceSelection:
     def load(cls, root: Path) -> VoiceSelection:
         selection_path = root / "selected_voice.json"
         try:
-            raw: Any = json.loads(selection_path.read_text(encoding="utf-8"))
+            saved_profile = read_preferences(root).get("voice_profile")
+            raw: Any = saved_profile if saved_profile is not None else json.loads(selection_path.read_text(encoding="utf-8"))
         except FileNotFoundError as error:
             raise SpeechConfigurationError(
                 f"No selected voice profile at {selection_path}"
@@ -217,6 +219,7 @@ class SpeechConfig:
     @classmethod
     def load(cls, root: Path) -> SpeechConfig:
         root = root.expanduser().resolve()
+        saved = read_preferences(root)
         voice = VoiceSelection.load(root)
         input_target = env_value("DARKLINGER_AUDIO_INPUT_TARGET", "").strip() or None
         output_target = env_value("DARKLINGER_AUDIO_OUTPUT_TARGET", "").strip() or None
@@ -226,11 +229,11 @@ class SpeechConfig:
             recorder=_resolve_command(env_value("DARKLINGER_RECORDER", "pw-record")),
             player=_resolve_command(env_value("DARKLINGER_PLAYER", "pw-play")),
             whisper_cli=_resolve_command(
-                env_value("DARKLINGER_WHISPER_CLI", "whisper-cli")
+                saved.get("whisper_cli", env_value("DARKLINGER_WHISPER_CLI", "whisper-cli"))
             ),
             whisper_model=_resolve_under(
                 root,
-                env_value("DARKLINGER_WHISPER_MODEL", "models/ggml-base.bin"),
+                saved.get("whisper_model", env_value("DARKLINGER_WHISPER_MODEL", "models/ggml-base.bin")),
             ),
             piper=_resolve_command(env_value("DARKLINGER_PIPER", "piper")),
             sox=_resolve_command(env_value("DARKLINGER_SOX", "sox")),
@@ -245,10 +248,10 @@ class SpeechConfig:
             start_timeout_seconds=_float_env("DARKLINGER_SPEECH_START_TIMEOUT", 12.0),
             maximum_record_seconds=_float_env("DARKLINGER_MAXIMUM_RECORD_SECONDS", 60.0),
             whisper_language=(
-                env_value("DARKLINGER_WHISPER_LANGUAGE", "auto").strip().casefold()
+                saved.get("whisper_language", env_value("DARKLINGER_WHISPER_LANGUAGE", "auto")).strip().casefold()
                 or "auto"
             ),
-            whisper_threads=_int_env("DARKLINGER_WHISPER_THREADS", 4),
+            whisper_threads=int(saved.get("whisper_threads", _int_env("DARKLINGER_WHISPER_THREADS", 4))),
             whisper_initial_prompt=env_value(
                 "DARKLINGER_WHISPER_INITIAL_PROMPT", ""
             ).strip(),
@@ -256,7 +259,9 @@ class SpeechConfig:
                 env_value("DARKLINGER_WHISPER_FALLBACK_CLI", "")
             ),
             whisper_fallback_model=_optional_under(
-                root, env_value("DARKLINGER_WHISPER_FALLBACK_MODEL", "")
+                root, (saved.get("whisper_model", env_value("DARKLINGER_WHISPER_FALLBACK_MODEL", ""))
+                       if env_value("DARKLINGER_WHISPER_FALLBACK_CLI", "")
+                       else env_value("DARKLINGER_WHISPER_FALLBACK_MODEL", ""))
             ),
         )
         config.validate()

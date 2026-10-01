@@ -76,7 +76,7 @@ async def run_ui(*, port: int, open_browser: bool) -> None:
     print(f"DARKLINGER UI: http://127.0.0.1:{port}/")
     if owner_monitor_started:
         print("Owner performance monitor opened in a separate terminal.")
-    print("Use HOLD TO KILL or Ctrl+C to stop V and the managed model.")
+    print("Use ZAPISZ I WYJDŹ to save this session's memoir; AWARYJNY STOP or Ctrl+C stops without it.")
     try:
         await server.serve()
     finally:

@@ -118,7 +118,7 @@ def test_ui_uses_darklinger_public_identity() -> None:
     assert "<title>DARKLINGER // V</title>" in index.text
     assert '<div class="brand-mark">D</div>' in index.text
     assert "<h1>DARKLINGER <span>// V</span></h1>" in index.text
-    assert "Hold to stop Darklinger and its model" in index.text
+    assert "Natychmiast zatrzymaj Darklingera i model, bez wspomnienia" in index.text
 
 
 def test_ui_accepts_legacy_session_header_during_rename() -> None:
@@ -415,3 +415,43 @@ def test_ui_runtime_close_stops_core_and_managed_model() -> None:
     asyncio.run(runtime.close())
 
     assert runtime.core.closed is True
+
+
+def test_model_log_is_authenticated_bounded_and_tracks_active_session(tmp_path):
+    runtime = _runtime()
+    path = tmp_path / "llama.log"
+    path.write_text("old\n" * 10000 + "\x1b[32mactual output\x1b[0m\n<script>test</script>\n")
+    runtime.model_session.log_path = path
+    client = TestClient(create_app(runtime))
+    headers = {"X-DARKLINGER-Session": runtime.session_token}
+    assert client.get("/api/model/log").status_code == 403
+    response = client.get("/api/model/log?path=/etc/shadow", headers=headers).json()
+    assert len(response["text"].splitlines()) <= 250
+    assert "actual output" in response["text"] and "\x1b" not in response["text"]
+    assert response["source"] == "llama.log"
+    runtime.core.model_runtime = SimpleNamespace(session=SimpleNamespace(log_path=None))
+    assert client.get("/api/model/log", headers=headers).json()["available"] is False
+
+
+def test_voice_endpoints_are_protected_and_block_changes_during_recording(tmp_path):
+    from v_core.speech.settings import SpeechSettings
+    runtime = _runtime()
+    runtime.speech_settings = SpeechSettings(tmp_path)
+    client = TestClient(create_app(runtime))
+    headers = {"X-DARKLINGER-Session": runtime.session_token}
+    for endpoint in ("settings", "install", "preview"):
+        assert client.post(f"/api/voice/{endpoint}", json={}).status_code == 403
+    assert client.get("/api/voice/settings", headers=headers).status_code == 200
+    runtime.speech = SimpleNamespace(push_to_talk_recording=True)
+    for endpoint in ("settings", "install", "preview"):
+        assert client.post(f"/api/voice/{endpoint}", headers=headers, json={}).status_code == 409
+
+
+def test_new_ui_keeps_owner_decisions_without_owner_deck_cards():
+    client = TestClient(create_app(_runtime()))
+    html = client.get("/").text
+    assert "OWNER DECK" not in html
+    assert 'id="model-log"' in html and 'id="voice-settings-dialog"' in html
+    assert 'id="proposal-list"' in html and 'id="emergency-stop"' in html
+    javascript = client.get("/assets/app.js").text
+    assert "console.textContent = result.text" in javascript

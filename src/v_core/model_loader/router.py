@@ -32,6 +32,8 @@ class ModelRouteDecision:
     fallback_model_paths: tuple[str, ...]
     requirements: tuple[str, ...]
     reason: str
+    outcome_adjustments: tuple[tuple[str, int], ...] = ()
+    policy_version: int = 1
 
 
 _CODE = re.compile(
@@ -218,6 +220,7 @@ class ModelRouter:
         strategy: str = "automatic",
         switch_margin: int = 5,
         excluded_model_paths: Iterable[str] = (),
+        outcome_adjustments: Mapping[str, int] | None = None,
     ) -> ModelRouteDecision | None:
         task_kind = task_kind or classify_model_phase(prompt, contract)
         if task_kind not in TASK_KINDS:
@@ -234,6 +237,9 @@ class ModelRouter:
             if candidate.model_path in excluded:
                 continue
             score = _weighted_score(candidate.card, weights)
+            if strategy == "automatic":
+                adjustment = (outcome_adjustments or {}).get(candidate.model_path, 0)
+                score = max(0, min(100, score + max(-10, min(10, int(adjustment)))))
             ranked.append((score, candidate.model_path, candidate.card))
         if not ranked:
             return None
@@ -262,6 +268,7 @@ class ModelRouter:
             score=selected_score,
             fallback_model_paths=fallbacks,
             requirements=requirements,
+            outcome_adjustments=tuple(sorted((outcome_adjustments or {}).items())) if strategy == "automatic" else (),
             reason=(
                 "selected by the owner-defined DARKLINGER-Full model hierarchy"
                 if strategy == "manual_hierarchy"
@@ -275,6 +282,7 @@ class ModelRouter:
                 else (
                     f"highest verified {task_kind} capability score across "
                     f"{len(ranked)} local candidate(s)"
+                    + (f"; outcome quality adjustments {dict(outcome_adjustments)} (policy v1)" if outcome_adjustments else "")
                 )
             ),
         )
@@ -296,4 +304,6 @@ def render_route_decision(decision: ModelRouteDecision) -> dict[str, Any]:
         "fallback_model_paths": list(decision.fallback_model_paths),
         "requirements": list(decision.requirements),
         "reason": decision.reason,
+        "outcome_adjustments": dict(decision.outcome_adjustments),
+        "policy_version": decision.policy_version,
     }

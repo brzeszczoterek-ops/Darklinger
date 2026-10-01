@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 from dataclasses import dataclass, field
+import hashlib
 import json
 from pathlib import Path
 import secrets
@@ -17,8 +18,10 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from v_core.speech import SpeechConfig, SpeechRuntime
+from v_core.speech.settings import SpeechSettings
+from v_core.memory.memoir import SessionMemoir, current_memoir_turn
 from v_core.response_preview import response_preview
-from v_core.ui.runtime_activity import runtime_activity
+from v_core.ui.runtime_activity import runtime_activity, model_log
 
 
 _STATIC_ROOT = Path(__file__).with_name("static")
@@ -40,6 +43,19 @@ class UIRuntime:
     closing: bool = False
     speech: SpeechRuntime | None = None
     activity_sample: dict[str, Any] = field(default_factory=dict)
+    speech_settings: SpeechSettings | None = None
+    memoir: SessionMemoir | None = None
+    shutdown_task: asyncio.Task[Any] | None = None
+
+    def __post_init__(self) -> None:
+        self.speech_settings = SpeechSettings(Path(getattr(self.config, "voice_root", "voice")))
+        memory_root = getattr(self.config, "memory_root", None)
+        if memory_root is not None:
+            self.memoir = SessionMemoir(Path(memory_root))
+
+    def speech_busy(self) -> bool:
+        return bool(self.closing or self.chat_lock.locked() or self.speech_lock.locked()
+                    or getattr(self.speech, "push_to_talk_recording", False))
 
     @property
     def edition_extension(self) -> Any:
@@ -75,7 +91,9 @@ class UIRuntime:
         edition = getattr(getattr(self.config, "edition", None), "name", "public")
         inference = getattr(getattr(self.core, "llm", None), "inference", None)
         payload: dict[str, Any] = {
-            "ready": not self.chat_lock.locked(),
+            "ready": not self.chat_lock.locked() and not self.closing,
+            "closing": self.closing,
+            "memoir": self.memoir.state if self.memoir else {"state": "unavailable"},
             "edition": edition,
             "uptime_seconds": max(0, int(time.monotonic() - self.started_at)),
             "model": model,
@@ -130,6 +148,12 @@ class UIRuntime:
 
     async def close(self) -> None:
         await self.cancel_active_chat()
+        if self.shutdown_task and not self.shutdown_task.done():
+            self.shutdown_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.shutdown_task
+        if self.speech_settings is not None:
+            await self.speech_settings.close()
         if self.speech is not None:
             with suppress(Exception):
                 await self.speech.close()
@@ -144,6 +168,10 @@ def create_app(runtime: UIRuntime) -> Starlette:
     async def index(_: Request) -> Response:
         source = (_STATIC_ROOT / "index.html").read_text(encoding="utf-8")
         source = source.replace(_SESSION_PLACEHOLDER, runtime.session_token)
+        asset_version = hashlib.sha256(
+            (_STATIC_ROOT / "app.js").read_bytes() + (_STATIC_ROOT / "app.css").read_bytes()
+        ).hexdigest()[:16]
+        source = source.replace("__DARKLINGER_ASSET_VERSION__", asset_version)
         return HTMLResponse(
             source,
             headers={
@@ -201,8 +229,12 @@ def create_app(runtime: UIRuntime) -> Starlette:
                     queue.put_nowait({"type": kind, "text": text})
 
                 preview_token = response_preview.set(preview)
+                memoir_turn = runtime.memoir.begin(prompt) if runtime.memoir else None
+                memoir_token = current_memoir_turn.set(memoir_turn)
                 try:
                     answer = await runtime.core.ask(prompt, on_token=emit_token)
+                    if memoir_turn is not None:
+                        memoir_turn.update(assistant=answer, status="answered")
                     # on_token may arrive through call_soon_threadsafe; give the
                     # loop one turn so token events stay ahead of the done event.
                     await asyncio.sleep(0)
@@ -226,11 +258,17 @@ def create_app(runtime: UIRuntime) -> Starlette:
                     )
                     raise
                 except Exception as exc:
+                    if memoir_turn is not None:
+                        memoir_turn["status"] = "error"
                     await queue.put({"type": "error", "error": str(exc)})
                 finally:
+                    current_memoir_turn.reset(memoir_token)
                     response_preview.reset(preview_token)
 
             async with runtime.chat_lock:
+                if runtime.closing:
+                    yield _ndjson({"type": "error", "error": "V is shutting down"})
+                    return
                 task = asyncio.create_task(execute())
                 runtime.active_chat_task = task
                 yield _ndjson({"type": "started"})
@@ -258,6 +296,8 @@ def create_app(runtime: UIRuntime) -> Starlette:
         denied = runtime.require_token(request)
         if denied is not None:
             return denied
+        if runtime.speech_busy():
+            return JSONResponse({"error": "V is busy or shutting down"}, status_code=409)
         async with runtime.speech_lock:
             try:
                 speech = runtime.ensure_speech()
@@ -285,9 +325,97 @@ def create_app(runtime: UIRuntime) -> Starlette:
             return denied
         if runtime.shutdown_callback is None:
             return JSONResponse({"error": "shutdown controller unavailable"}, status_code=503)
+        emergency = request.query_params.get("emergency") == "1"
+        if runtime.shutdown_task and not emergency:
+            return JSONResponse({"status": "saving_memory", "memoir": runtime.memoir.state})
         await runtime.cancel_active_chat()
+        if runtime.speech is not None:
+            # Exiting stops microphone capture before spending time on prose.
+            with suppress(Exception):
+                await runtime.speech.cancel_push_to_talk()
+        if emergency and runtime.shutdown_task:
+            runtime.shutdown_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await runtime.shutdown_task
+        if not emergency and runtime.memoir and runtime.memoir.turns:
+            async def remember_and_stop() -> None:
+                try:
+                    cancel_memory = getattr(getattr(runtime.core, "agent", None), "cancel_background_memory", None)
+                    if callable(cancel_memory):
+                        await cancel_memory()
+                    await runtime.memoir.save(getattr(runtime.core, "llm", None))
+                finally:
+                    asyncio.get_running_loop().call_later(2.5, runtime.shutdown_callback)
+            runtime.shutdown_task = asyncio.create_task(remember_and_stop())
+            return JSONResponse({"status": "saving_memory"}, status_code=202)
         asyncio.get_running_loop().call_later(0.15, runtime.shutdown_callback)
         return JSONResponse({"status": "shutting_down"})
+
+    async def log(request: Request) -> Response:
+        denied = runtime.require_token(request)
+        if denied is not None:
+            return denied
+        return JSONResponse(model_log(runtime.active_session), headers={"Cache-Control": "no-store"})
+
+    async def voice_settings(request: Request) -> Response:
+        denied = runtime.require_token(request)
+        if denied is not None:
+            return denied
+        manager = runtime.speech_settings
+        try:
+            if request.method == "POST":
+                if runtime.speech_busy() or manager.busy:
+                    return JSONResponse({"error": "Zakończ zadanie, nagrywanie lub instalację przed zmianą ustawień."}, status_code=409)
+                payload = await request.json()
+                if not isinstance(payload, dict):
+                    raise ValueError("Settings must be an object")
+                async with runtime.speech_lock:
+                    if runtime.closing or runtime.chat_lock.locked() or getattr(runtime.speech, "push_to_talk_recording", False):
+                        return JSONResponse({"error": "V is busy or recording"}, status_code=409)
+                    manager.save(payload)
+                    if runtime.speech is not None:
+                        await runtime.speech.close()
+                    runtime.speech = None
+            return JSONResponse(manager.status(), headers={"Cache-Control": "no-store"})
+        except (ValueError, TypeError, OSError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    async def voice_install(request: Request) -> Response:
+        denied = runtime.require_token(request)
+        if denied is not None:
+            return denied
+        if runtime.speech_busy() or runtime.speech_settings.busy:
+            return JSONResponse({"error": "V or installer is busy"}, status_code=409)
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                raise ValueError("Installer request must be an object")
+            runtime.speech_settings.start_install(str(payload.get("kind", "")), str(payload.get("id", "")))
+            return JSONResponse(runtime.speech_settings.job, status_code=202)
+        except (ValueError, TypeError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    async def voice_preview(request: Request) -> Response:
+        denied = runtime.require_token(request)
+        if denied is not None:
+            return denied
+        if runtime.speech_busy():
+            return JSONResponse({"error": "V is busy"}, status_code=409)
+        try:
+            async with runtime.speech_lock:
+                await asyncio.wait_for(runtime.ensure_speech().speak(
+                    "Cześć, Boss. To próbka zapisanego głosu V. Hello Boss, this is V's saved voice."
+                ), timeout=90)
+            return JSONResponse({"status": "complete"})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=503)
+
+    async def voice_install_cancel(request: Request) -> Response:
+        denied = runtime.require_token(request)
+        if denied is not None:
+            return denied
+        await runtime.speech_settings.close()
+        return JSONResponse(runtime.speech_settings.job)
 
     async def decide_proposal(request: Request) -> Response:
         denied = runtime.require_token(request)
@@ -321,6 +449,11 @@ def create_app(runtime: UIRuntime) -> Starlette:
         routes=[
             Route("/", index, methods=["GET"]),
             Route("/api/status", status, methods=["GET"]),
+            Route("/api/model/log", log, methods=["GET"]),
+            Route("/api/voice/settings", voice_settings, methods=["GET", "POST"]),
+            Route("/api/voice/install", voice_install, methods=["POST"]),
+            Route("/api/voice/install/cancel", voice_install_cancel, methods=["POST"]),
+            Route("/api/voice/preview", voice_preview, methods=["POST"]),
             Route("/api/chat", chat, methods=["POST"]),
             Route("/api/voice/ptt/start", ptt_start, methods=["POST"]),
             Route("/api/voice/ptt/stop", ptt_stop, methods=["POST"]),

@@ -51,6 +51,7 @@ from .autonomy.search_reference import resolve_search_reference
 from .tool_catalog_review import review_catalog
 from .tool_self_test import test_local_tools
 from .llm import LLM
+from .llm.llm import IncompleteGenerationError
 from .learning.source_builder import (
     repair_generated_source_argument_alias,
     repair_generated_source_json_wrapper,
@@ -60,6 +61,7 @@ from .model_loader.router import classify_model_phase
 from .tool_dispatcher import ToolDispatcher
 from .memory.memory_engine import MemoryEngine
 from .memory.manager import clip_text
+from .memory.memoir import recalled_memoirs, record_memoir_execution
 from .capability_dispatcher import CapabilityDispatcher
 from .capabilities.research import ResearchTask
 from .capabilities.web_target import extract_web_target, extract_web_targets
@@ -159,6 +161,11 @@ class Agent:
             set_edition(
                 getattr(getattr(config, "edition", None), "name", "public")
             )
+        from .inference import InferenceController
+        from .model_loader.performance import InferenceOutcomeStore
+        controller = getattr(getattr(self, "llm", None), "inference", None)
+        if isinstance(controller, InferenceController):
+            controller.outcome_store = InferenceOutcomeStore(config.model_runtime_root / "outcomes")
         self.phase_router = phase_router
         self.response_fallback_router = response_fallback_router
 
@@ -209,9 +216,39 @@ class Agent:
         on_token: Callable[[str], None] | None = None,
     ) -> str:
 
+        from .model_loader.outcome_runtime import OutcomeRun
+        from .inference import InferenceController
+        controller = getattr(getattr(self, "llm", None), "inference", None)
+        store = controller.outcome_store if isinstance(controller, InferenceController) else None
+        if prompt.strip().startswith("/feedback") or prompt.strip() == "/inference-memory":
+            if store is None:
+                return "Inference outcome memory is unavailable."
+            if prompt.strip() == "/inference-memory":
+                return json.dumps(controller.status(), ensure_ascii=False, default=str)
+            parts = prompt.strip().split()
+            if len(parts) not in {2, 3} or parts[1] not in {"good", "bad"}:
+                return "Usage: /feedback good|bad [task_id]"
+            try:
+                feedback = store.record_feedback(parts[2] if len(parts) == 3 else controller.last_task_id, parts[1] == "good")
+                return f"Explicit feedback saved for task {feedback.task_id}: {feedback.outcome}."
+            except ValueError as error:
+                return str(error)
+        if isinstance(controller, InferenceController):
+            from .model_loader.router import classify_model_phase
+            controller.begin_turn(classify_model_phase(prompt))
+        run = OutcomeRun(controller, prompt) if store is not None else None
+        domain = "none"
         try:
             return await self._run_turn(prompt, on_token)
+        except asyncio.CancelledError:
+            domain = "cancelled"
+            raise
+        except Exception:
+            domain = "environment"
+            raise
         finally:
+            if run is not None:
+                run.finish(domain=domain)
             # MCP stdio contexts are task-affine.  The browser session is
             # opened while executing this turn, so it must be closed by this
             # same task rather than deferred to application shutdown.
@@ -361,6 +398,7 @@ class Agent:
         *,
         trace: AgentTaskTrace | None = None,
         remember: bool = True,
+        process_memory: bool | None = None,
         creative_response: bool = False,
     ) -> str:
         inference = getattr(self.llm, "inference", None)
@@ -491,20 +529,25 @@ Current relationship stage: {stage}.
 
         generation_budget = 768 if creative_response else 96
         async def generate_candidate() -> str:
-            if on_token is None:
-                generated = await self.llm.ask(
-                    messages=messages,
-                    max_tokens=generation_budget,
-                )
-            else:
-                # Buffer the whole candidate. A rejected model must never leak
-                # half a refusal before the runtime swaps to its fallback.
-                generated, _ = await self._stream_guarded_english(
-                    messages,
-                    lambda _chunk: None,
-                    max_tokens=generation_budget,
-                )
-            return str(generated or "")
+            for attempt in range(2):
+                try:
+                    if on_token is None:
+                        generated = await self.llm.ask(
+                            messages=messages,
+                            max_tokens=generation_budget * (attempt + 1),
+                        )
+                    else:
+                        # Failed drafts are buffered and never committed as answers.
+                        generated, _ = await self._stream_guarded_english(
+                            messages,
+                            lambda _chunk: None,
+                            max_tokens=generation_budget * (attempt + 1),
+                        )
+                    return str(generated or "")
+                except IncompleteGenerationError:
+                    if attempt:
+                        raise
+            raise AssertionError("unreachable generation retry")
 
         answer = await generate_candidate()
 
@@ -592,7 +635,12 @@ Current relationship stage: {stage}.
 
         execution = self._finish_agent_trace(trace, answer) if trace is not None else None
         if remember:
-            await self._remember_task(prompt, answer, execution=execution)
+            await self._remember_task(
+                prompt,
+                answer,
+                execution=execution,
+                process_memory=process_memory,
+            )
         return answer
 
     @staticmethod
@@ -1569,6 +1617,7 @@ Current relationship stage: {stage}.
                 on_token,
                 trace=trace,
                 remember=True,
+                process_memory=semantic_intent.retain_memory,
                 creative_response=semantic_intent.creative_response,
             )
 
@@ -2763,12 +2812,19 @@ Current relationship stage: {stage}.
                     {
                         "role": "user",
                         "content": (
-                            "DARKLINGER's runtime evidence contract is now satisfied. "
+                            "DARKLINGER has collected the minimum required observations. "
+                            "This does not prove that the requested explanation is complete. "
                             "Tool execution is closed for this task. Produce the final "
                             "answer now using only the verified tool evidence already "
                             "present. Do not request, describe, or promise another tool "
                             "call, and do not invent findings. Output in "
                             f"{self._effective_response_language(routing_prompt)}. "
+                            "Answer the actual objective, including the original question "
+                            "when this is a continuation. Explain what the sources establish; "
+                            "a source title or link alone is not an explanation. If the "
+                            "sources describe a differently named subject, explicitly "
+                            "distinguish it instead of assuming the names are synonyms. "
+                            "State what remains unverified rather than inventing a definition. "
                             "For a simple extraction, answer briefly with the requested "
                             "values and source; do not pad it with offers or commentary "
                             "about the user's behavior or previous requests. Preserve "
@@ -2814,7 +2870,15 @@ Current relationship stage: {stage}.
                                 list(contract.required_research_facets),
                                 ensure_ascii=False,
                             )
-                            + "."
+                            + ".\n\nThe actual requested objective is:\n"
+                            + routing_prompt
+                            + "\n\nThe name in a question is not evidence that the named "
+                            "thing exists or is an alias of another thing. If that exact "
+                            "name is absent from the observed sources, BEGIN with this "
+                            "limitation, then explain the differently named subject that "
+                            "the sources do establish. Do not silently equate them. "
+                            "Absence in the inspected sources is not proof of global "
+                            "nonexistence; limit negative claims to what was searched."
                         ),
                     }
                 )
@@ -2908,7 +2972,7 @@ Current relationship stage: {stage}.
                         chunks = []
                         budget = creation_budget(evidence_ledger())
                         async with asyncio.timeout(budget.remaining_seconds if budget.attempts else None):
-                            async for chunk in streamer(messages=messages, max_tokens=512):
+                            async for chunk in streamer(messages=messages, max_tokens=512 * (generation_attempt + 1)):
                                 chunks.append(chunk)
                                 preview("draft_token", chunk)
                         answer = "".join(chunks)
@@ -2927,7 +2991,7 @@ Current relationship stage: {stage}.
                                     successful_calls,
                                 )
                             ),
-                            max_tokens=(
+                            max_tokens=(generation_attempt + 1) * (
                                 512
                                 if finalization_required
                                 and contract.requires_evidence_report
@@ -2943,6 +3007,8 @@ Current relationship stage: {stage}.
                         ), evidence_ledger())
                         answer = str(getattr(response, "content", "") or "")
                         response_finish_reason = str(getattr(response, "finish_reason", "") or "")
+                        if response_finish_reason == "length" and not source_owned_phase:
+                            raise IncompleteGenerationError()
                         for index, call in enumerate(
                             getattr(response, "tool_calls", []) or []
                         ):
@@ -2971,8 +3037,18 @@ Current relationship stage: {stage}.
                         answer, _ = await self._await_creation_step(self._stream_guarded_english(
                             generation_messages,
                             lambda _chunk: None,
-                            max_tokens=1536 if source_owned_phase else 512,
+                            max_tokens=(1536 if source_owned_phase else 512) * (generation_attempt + 1),
                         ), evidence_ledger())
+                except IncompleteGenerationError:
+                    if trace is not None:
+                        trace.record_event("incomplete_generation", {
+                            "attempt": generation_attempt + 1,
+                            "reason": "output_token_limit",
+                            "tool_calls_executed": False,
+                        })
+                    if generation_attempt == 0:
+                        continue
+                    raise
                 except TimeoutError:
                     if creation_budget(evidence_ledger()).attempts:
                         return await self._finish_creation_failure_budget(
@@ -3027,8 +3103,8 @@ Current relationship stage: {stage}.
                     if finalization_answer_rejections >= 2:
                         final_answer = (
                             "The model returned an empty grounded report twice, so "
-                            "I killed that rewrite loop. Here's the runtime-verified "
-                            "result instead:\n\n"
+                            "I killed that rewrite loop. The requested answer is not "
+                            "complete. These are the observations preserved so far:\n\n"
                             + self._owner_verified_final_report(
                                 working_summary,
                                 successful_calls,
@@ -3050,7 +3126,9 @@ Current relationship stage: {stage}.
                                     "tool_execution_closed": True,
                                 },
                             )
-                        evidence = self._finish_agent_trace(trace, final_answer)
+                        evidence = self._block_agent_trace(
+                            trace, "model returned an empty final report twice",
+                        )
                         await self._remember_task(
                             prompt,
                             final_answer,
@@ -3218,15 +3296,19 @@ Current relationship stage: {stage}.
                 if finalization_rejections >= 2:
                     final_answer = (
                         "Enough. The model tried twice to reopen tools after the "
-                        "evidence was already complete, so I killed that loop. "
-                        "Here's the runtime-verified result.\n\n"
-                        + self._verified_tool_result_fallback(
-                            [],
-                            verified_calls=successful_calls,
-                            generated_contract=generated_tool_contract,
+                        "minimum observations had been collected, so I killed that loop. "
+                        "The requested answer is not complete. Preserved evidence:\n\n"
+                        + self._owner_verified_final_report(
+                            working_summary,
+                            successful_calls,
+                            contract,
+                            objective=routing_prompt,
+                            stop_reason="model kept requesting tools instead of answering",
                         )
                     )
-                    evidence = self._finish_agent_trace(trace, final_answer)
+                    evidence = self._block_agent_trace(
+                        trace, "model failed to produce a final answer after tool execution",
+                    )
                     await self._remember_task(
                         routing_prompt,
                         final_answer,
@@ -3268,6 +3350,10 @@ Current relationship stage: {stage}.
                     enforcement_kwargs["generated_contract"] = (
                         generated_tool_contract
                     )
+                if "allow_verified_tool_fallback" in enforcement_parameters:
+                    # A source ledger is useful for a blocked progress report,
+                    # but cannot replace the answer before completion validation.
+                    enforcement_kwargs["allow_verified_tool_fallback"] = False
                 final_answer = await enforce_english(
                     messages,
                     answer,
@@ -3328,7 +3414,7 @@ Current relationship stage: {stage}.
                         *contract.answer_issues(
                             final_answer,
                             successful_calls,
-                            request=prompt,
+                            request=routing_prompt,
                         ),
                         *self._generated_tool_report_issues(
                             final_answer,
@@ -3525,13 +3611,13 @@ Current relationship stage: {stage}.
                             if finalization_answer_rejections >= 2:
                                 final_answer = (
                                     "I removed the unsupported claims from the two "
-                                    "broken rewrites. Here is the report rebuilt "
-                                    "only from evidence DARKLINGER actually observed:\n\n"
+                                    "broken rewrites. The requested answer is not complete. "
+                                    "Here is only the evidence DARKLINGER actually observed:\n\n"
                                     + self._owner_verified_final_report(
                                         working_summary,
                                         successful_calls,
                                         contract,
-                                        objective=prompt,
+                                        objective=routing_prompt,
                                         stop_reason=(
                                             "two model-written reports failed "
                                             "grounding validation"
@@ -3559,9 +3645,9 @@ Current relationship stage: {stage}.
                                             "tool_execution_closed": True,
                                         },
                                     )
-                                evidence = self._finish_agent_trace(
+                                evidence = self._block_agent_trace(
                                     trace,
-                                    final_answer,
+                                    "two final reports failed grounding validation",
                                 )
                                 await self._remember_task(
                                     prompt,
@@ -3603,7 +3689,16 @@ Current relationship stage: {stage}.
                             item.startswith("answer:ungrounded_online_claims=")
                             for item in missing_evidence
                         )
-                        if any(
+                        if finalization_required:
+                            repair_action = (
+                                "Tool execution is closed. Rewrite the answer using only "
+                                "the observed facts and exact source URLs. Remove unsupported "
+                                "claims, distinguish differently named subjects, and explain "
+                                "what the sources actually say. State any unresolved gap "
+                                "explicitly. Do not replace the explanation with just links "
+                                "or request another tool call."
+                            )
+                        elif any(
                             item.startswith("answer:") for item in missing_evidence
                         ) and not unmet_requirements() and not ungrounded_online:
                             repair_action = (
@@ -4372,12 +4467,18 @@ Current relationship stage: {stage}.
                     1_500,
                     min(6_000, context_tokens - 2_048) // max(1, len(requests)),
                 )
-                if tool_name == "browser_snapshot":
+                browser_evidence = self._browser_evidence_text(tool_name, tool_result)
+                is_browser_evidence = browser_evidence is not None
+                if is_browser_evidence:
                     model_tool_result = self._fit_browser_snapshot_output(
-                        tool_result,
+                        browser_evidence,
                         max_characters=model_output_limit,
                         preserve_images=(
                             "images" in contract.required_research_facets
+                        ),
+                        prioritize_prose=(
+                            tool_name == "web_read"
+                            and not contract.required_research_facets
                         ),
                     )
                 else:
@@ -4408,7 +4509,7 @@ Current relationship stage: {stage}.
                     "result_sha256": result_sha256,
                     "result_excerpt": (
                         model_tool_result[:6_000]
-                        if tool_name in {"browser_snapshot", "full_tor_inventory"}
+                        if is_browser_evidence or tool_name == "full_tor_inventory"
                         else tool_result[:2_000]
                     ),
                     "error": tool_error or "",
@@ -4487,7 +4588,7 @@ Current relationship stage: {stage}.
                         recovery_ticket=recovery_ticket,
                         evidence_excerpt=(
                             model_tool_result
-                            if tool_name in {"browser_snapshot", "full_tor_inventory"}
+                            if is_browser_evidence or tool_name == "full_tor_inventory"
                             else None
                         ),
                     )
@@ -5674,8 +5775,9 @@ Current relationship stage: {stage}.
         Language models occasionally reproduce a real page with a translated,
         truncated, or otherwise invented path.  A single bad path must not
         discard an otherwise grounded report.  Host equality plus exactly one
-        observed URL on that host makes the repair deterministic; ambiguous
-        hosts are deliberately left to the normal grounding validator.
+        observed URL on that host makes the repair deterministic. A Markdown
+        link whose literal URL label is observed also identifies its intended
+        target; other ambiguous links are left to the grounding validator.
         """
 
         url_pattern = re.compile(r"https?://[^\s<>\[\]{}()\"']+")
@@ -5706,8 +5808,26 @@ Current relationship stage: {stage}.
                 observed_urls.add(observed)
                 observed_by_host.setdefault(hostname, set()).add(observed)
 
+        repairs: list[dict[str, str]] = []
+
+        def repair_literal_url_link(match: re.Match[str]) -> str:
+            label, target = match.groups()
+            if (
+                label in observed_urls
+                and target not in observed_urls
+                and urlsplit(label).hostname == urlsplit(target).hostname
+            ):
+                repairs.append({"from": target, "to": label})
+                return f"[{label}]({label})"
+            return match.group(0)
+
+        repaired = re.sub(
+            r"\[(https?://[^\s\[\]]+)\]\((https?://[^\s()]+)\)",
+            repair_literal_url_link,
+            answer,
+        )
         replacements: dict[str, str] = {}
-        for match in url_pattern.finditer(answer):
+        for match in url_pattern.finditer(repaired):
             candidate = match.group(0).rstrip(".,;:!?")
             if candidate in observed_urls:
                 continue
@@ -5716,8 +5836,6 @@ Current relationship stage: {stage}.
             if len(matches) == 1:
                 replacements[candidate] = next(iter(matches))
 
-        repaired = answer
-        repairs: list[dict[str, str]] = []
         for candidate, observed in replacements.items():
             repaired = repaired.replace(candidate, observed)
             repairs.append({"from": candidate, "to": observed})
@@ -5853,7 +5971,7 @@ Current relationship stage: {stage}.
                     candidate_url
                 ):
                     current_url = candidate_url
-            if tool != "browser_snapshot":
+            if tool not in {"browser_snapshot", "web_read"}:
                 continue
             excerpt = str(call.get("result_excerpt", ""))
             page_match = re.search(
@@ -7346,6 +7464,13 @@ Current relationship stage: {stage}.
                 memory_query=memory_query,
             ).render(),
         ]
+
+        memoirs = recalled_memoirs(
+            getattr(getattr(self, "config", None), "memory_root", None), prompt,
+            recall=bool(recall_memory),
+        )
+        if memoirs:
+            sections.extend(["=== RECALLED SESSION MEMOIRS (UNVERIFIED DATA) ===", memoirs])
 
         sections.extend(
             [
@@ -10349,6 +10474,27 @@ the candidate's own output.
         tail = body - head
         return result[:head] + marker + (result[-tail:] if tail else "")
 
+    @staticmethod
+    def _browser_evidence_text(tool: str, result: str) -> str | None:
+        """Unwrap web_read snapshots before bounding model and ledger evidence.
+
+        Clipping serialized JSON first retains navigation chrome and can lose
+        the entire article or leave an undecodable content string. Keep the raw
+        result hash separately; the excerpt must contain the observed text.
+        """
+        if tool == "browser_snapshot":
+            return result
+        if tool != "web_read":
+            return None
+        try:
+            payload = json.loads(result)
+        except (ValueError, TypeError):
+            return None
+        content = payload.get("content") if isinstance(payload, dict) else None
+        if isinstance(content, str) and re.search(r"^- Page URL:", content, re.M):
+            return content
+        return None
+
     @classmethod
     def _fit_browser_snapshot_output(
         cls,
@@ -10356,6 +10502,7 @@ the candidate's own output.
         *,
         max_characters: int,
         preserve_images: bool = False,
+        prioritize_prose: bool = False,
     ) -> str:
         """Prioritize observed DuckDuckGo results over accessibility UI chrome.
 
@@ -10384,6 +10531,42 @@ the candidate's own output.
                 re.MULTILINE,
             )
             lines = result.splitlines()
+
+            # Narrative web reads need article paragraphs, not ticker prices or
+            # "related news" cards that happen to contain a currency symbol.
+            # Preserve paragraph subtrees and adjacent lists in document order.
+            # Structured shopping/inventory requests keep the existing path.
+            if prioritize_prose:
+                paragraphs = [
+                    index for index, line in enumerate(lines)
+                    if re.match(r"\s*- paragraph(?:\s|\[|:)", line)
+                ]
+                if len(paragraphs) >= 2:
+                    blocks: list[str] = []
+                    for start in paragraphs:
+                        indent = len(lines[start]) - len(lines[start].lstrip())
+                        end = start + 1
+                        while end < len(lines):
+                            line = lines[end]
+                            depth = len(line) - len(line.lstrip())
+                            adjacent_list = depth == indent and re.match(
+                                r"\s*- list(?:\s|\[|:)", line,
+                            )
+                            if line.strip() and depth <= indent and not adjacent_list:
+                                break
+                            end += 1
+                        blocks.append("\n".join(
+                            re.sub(r"\s+\[(?:ref|cursor)=[^\]]+\]", "", line).rstrip()
+                            for line in lines[start:end]
+                        ))
+                    header = "\n".join(
+                        line for line in lines
+                        if line.startswith(("- Page URL:", "- Page Title:"))
+                    )
+                    return cls._fit_tool_output(
+                        header + "\n\n[DARKLINGER observed article excerpts]\n\n" + "\n\n".join(blocks),
+                        max_characters=max_characters,
+                    )
 
             # Repeated semantic ``article`` blocks are usually the actual cards
             # on a listing page (products, posts, offers), while the beginning
@@ -10941,6 +11124,10 @@ the candidate's own output.
             root = autonomy_root / "interactive"
         try:
             trace = AgentTaskTrace(root, prompt)
+            from .model_loader.outcome_runtime import current_run
+            outcome_run = current_run()
+            if outcome_run is not None:
+                outcome_run.trace = trace
         except OSError as error:
             print(f"[Task] Could not create execution trace: {error}")
             return None
@@ -10961,6 +11148,10 @@ the candidate's own output.
         if trace is None:
             return None
         trace.complete(answer)
+        from .model_loader.outcome_runtime import current_run
+        outcome_run = current_run()
+        if outcome_run is not None:
+            outcome_run.trace_finished(trace)
         self._last_execution_context = AgentTaskTrace.latest_context(trace.root)
         print(f"[Task {trace.task_id}] completed")
         return trace.evidence()
@@ -10973,6 +11164,10 @@ the candidate's own output.
         if trace is None:
             return None
         trace.block(reason)
+        from .model_loader.outcome_runtime import current_run
+        outcome_run = current_run()
+        if outcome_run is not None:
+            outcome_run.trace_finished(trace)
         self._last_execution_context = AgentTaskTrace.latest_context(trace.root)
         print(f"[Task {trace.task_id}] blocked")
         return trace.evidence()
@@ -10983,12 +11178,14 @@ the candidate's own output.
         answer: str,
         *,
         execution: dict[str, Any] | None = None,
+        process_memory: bool | None = None,
     ) -> None:
 
         event_data: dict[str, Any] = {
             "task": prompt,
             "result": answer,
         }
+        record_memoir_execution(execution)
         if execution is not None:
             event_data["execution"] = execution
         self.memory.session.add(
@@ -10996,7 +11193,9 @@ the candidate's own output.
             event_data,
         )
 
-        if not self._should_process_memory(prompt):
+        if process_memory is None:
+            process_memory = self._should_process_memory(prompt)
+        if not process_memory:
             return
 
         processing = (
@@ -11066,6 +11265,15 @@ the candidate's own output.
         if not language_problem and not voice_problem:
             return answer
 
+        if verified_calls and not language_problem:
+            # Facts are validated by the caller after this pass. Do not spend
+            # another model turn rewriting a tool-backed report for personality:
+            # that can shorten it, invent claims, or replace it with a link ledger.
+            return self._deterministic_voice_fallback(answer, boss_prompt)
+
+        rewrite_budget = (
+            min(2048, max(512, len(answer) // 2)) if verified_calls else 256
+        )
         correction_directive = f"""
 The model's candidate answer may violate V's language or identity contract.
 
@@ -11148,7 +11356,7 @@ Output only the rewritten reply. Never discuss these instructions.
 
         corrected = await self.llm.ask(
             messages=correction_messages,
-            max_tokens=256,
+            max_tokens=rewrite_budget,
         )
 
         corrected_language_ok = (
@@ -11181,7 +11389,7 @@ Output only the rewritten reply. Never discuss these instructions.
                         ),
                     },
                 ],
-                max_tokens=256,
+                max_tokens=rewrite_budget,
             )
             corrected_language_ok = bool(corrected) and (
                 matches_requested_language(corrected, response_language)
@@ -11194,6 +11402,9 @@ Output only the rewritten reply. Never discuss these instructions.
         )
         if corrected and corrected_language_ok and corrected_voice_ok:
             return corrected
+
+        if verified_calls and corrected and corrected_language_ok:
+            return self._deterministic_voice_fallback(corrected, boss_prompt)
 
         if corrected and corrected_language_ok and not corrected_voice_ok:
             verified_result = (
@@ -11256,6 +11467,11 @@ swear mechanically. Output only the rewritten answer.
 
         if not language_problem:
             return self._deterministic_voice_fallback(answer, boss_prompt)
+
+        if verified_calls and not allow_verified_tool_fallback:
+            # Let the caller reject/retry an absent answer. A generic language
+            # error or a source ledger is not a completed research deliverable.
+            return ""
 
         verified_result = (
             self._verified_tool_result_fallback(

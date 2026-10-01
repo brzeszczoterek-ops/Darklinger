@@ -58,6 +58,20 @@ def _tail(path: Path, maximum: int = 128 * 1024) -> str:
         return ""
 
 
+def model_log(session: Any) -> dict[str, Any]:
+    """Bounded tail of the runtime-owned log, never a client-selected file."""
+    path = getattr(session, "log_path", None)
+    if path is None or not Path(path).is_file():
+        return {"available": False, "text": "Brak lokalnego logu tego backendu.", "source": ""}
+    path = Path(path)
+    text = _tail(path, 64 * 1024)
+    # Strip terminal escape sequences, including OSC/hyperlinks and C0 controls.
+    text = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", "", text)
+    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
+    text = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", text)
+    return {"available": True, "text": "\n".join(text.splitlines()[-250:]), "source": path.name}
+
+
 def _latest_checkpoint(
     root: Path,
     *,
