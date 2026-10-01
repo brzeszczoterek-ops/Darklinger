@@ -5,6 +5,92 @@ const headers = {"X-DARKLINGER-Session": sessionToken};
 const jsonHeaders = {...headers, "Content-Type": "application/json"};
 
 const byId = (id) => document.getElementById(id);
+
+// Memory content is untrusted text. Never render it as HTML or execute it.
+let memoryView = "sessions";
+let memoryRequest = 0;
+async function memoryGet(query) {
+  const response = await fetch(`/api/memory/browser?${new URLSearchParams(query)}`, {headers, cache: "no-store"});
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Nie udało się odczytać pamięci.");
+  return data;
+}
+function memorySection(title, text) {
+  const section = document.createElement("section");
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  const body = document.createElement("pre");
+  body.textContent = text;
+  section.append(heading, body);
+  byId("memory-browser-content").append(section);
+}
+async function renderMemory(refreshList = true) {
+  const request = ++memoryRequest;
+  const status = byId("memory-browser-status");
+  const content = byId("memory-browser-content");
+  content.replaceChildren();
+  status.textContent = "Odczytywanie…";
+  byId("memory-session-label").hidden = memoryView !== "sessions";
+  byId("memory-sessions").setAttribute("aria-pressed", String(memoryView === "sessions"));
+  byId("memory-persona").setAttribute("aria-pressed", String(memoryView === "persona"));
+  try {
+    if (memoryView === "persona") {
+      const data = await memoryGet({view: "persona"});
+      if (request !== memoryRequest) return;
+      status.textContent = data.notice;
+      for (const section of data.sections) memorySection(section.title, section.text);
+      if (!data.sections.length) memorySection("Persona", "Persona nie jest jeszcze dostępna w tym runtime.");
+      return;
+    }
+    const select = byId("memory-session-select");
+    if (refreshList) {
+      const data = await memoryGet({view: "sessions"});
+      if (request !== memoryRequest) return;
+      const previous = select.value;
+      select.replaceChildren();
+      for (const session of data.sessions) {
+        const option = document.createElement("option");
+        option.value = session.id;
+        option.textContent = session.label;
+        select.append(option);
+      }
+      if (data.sessions.some((s) => s.id === previous)) select.value = previous;
+      select.dataset.scope = data.archive_allowed ? "Archiwum lokalnego profilu." : "Public: tylko bieżąca sesja.";
+      if (data.limited) select.dataset.scope += " Lista ograniczona: maks. 100 archiwów z 1000 sprawdzonych wpisów.";
+    }
+    if (!select.value) {
+      status.textContent = "Magazyn sesji nie jest dostępny.";
+      return;
+    }
+    const data = await memoryGet({view: "session", session: select.value});
+    if (request !== memoryRequest) return;
+    if (!data.available) { status.textContent = "Sesja niedostępna."; return; }
+    const record = data.record;
+    const states = {idle: "jeszcze niezapisane", saving: "zapisywanie", saved: "zapisane", error: "błąd zapisu", empty: "pusta sesja"};
+    status.textContent = `${select.dataset.scope} Wspomnienie: ${states[data.save_state] || data.save_state}.`;
+    memorySection("Wspomnienie sesji", record.memory || "Brak zapisanego wspomnienia. Poniżej zapis bieżącej rozmowy, nie jej podsumowanie.");
+    memorySection("Pochodzenie", `Sesja: ${record.session_id}\nPoczątek: ${record.started_at}\nŹródło: ${record.source}\nPodsumowanie nie jest zweryfikowanym faktem.\nOdwołania do tur: ${record.turn_ids.join(", ") || "brak"}${record.partial_excerpts ? "\nPodsumowanie powstało z ograniczonych fragmentów." : ""}${record.fallback_reason ? `\nPrzyczyna zapisu zastępczego: ${record.fallback_reason}` : ""}`);
+    if (record.omitted_turns) memorySection("Ograniczenie podglądu", `Pominięto ${record.omitted_turns} wcześniejszych tur. Pokazujemy ostatnie 50; długie pola są oznaczone jako skrócone.`);
+    for (const turn of record.turns) {
+      memorySection(`Tura ${turn.id ?? "?"} · ${turn.at} · ${turn.status}`, `Ty:\n${turn.user}\n\nV — zapis wypowiedzi, nie potwierdzenie wykonania:\n${turn.assistant}`);
+    }
+  } catch (error) {
+    if (request === memoryRequest) status.textContent = error.message;
+  }
+}
+byId("memory-browser-open").addEventListener("click", () => {
+  byId("memory-browser-dialog").showModal();
+  renderMemory();
+});
+byId("memory-sessions").addEventListener("click", () => { memoryView = "sessions"; renderMemory(); });
+byId("memory-persona").addEventListener("click", () => { memoryView = "persona"; renderMemory(); });
+byId("memory-refresh").addEventListener("click", () => renderMemory());
+byId("memory-session-select").addEventListener("change", () => renderMemory(false));
+byId("memory-browser-dialog").addEventListener("close", () => {
+  ++memoryRequest;
+  byId("memory-browser-content").replaceChildren();
+});
+
 const ui = {
   edition: byId("edition-badge"),
   runtime: byId("runtime-state"),

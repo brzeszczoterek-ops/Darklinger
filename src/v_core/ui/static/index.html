@@ -22,6 +22,7 @@
         <span id="edition-badge" class="badge">PUBLIC</span>
         <span id="runtime-state" class="status-pill"><i></i> INITIALIZING</span>
         <button id="voice-settings-open" class="utility-button" type="button">GŁOS I WHISPER</button>
+        <button id="memory-browser-open" class="utility-button" type="button">PAMIĘĆ I PERSONA</button>
         <button id="shutdown" class="shutdown" type="button" title="Zapisz wspomnienie sesji i zamknij Darklingera">
           ZAPISZ I WYJDŹ
           <span class="shutdown-progress"></span>
@@ -170,6 +171,18 @@
     <progress id="voice-install-progress" class="hidden" max="100"></progress>
     <button id="voice-install-cancel" class="utility-button hidden" type="button">Przerwij instalację</button>
     <pre id="voice-install-status" role="status"></pre>
+  </dialog>
+  <dialog id="memory-browser-dialog" aria-labelledby="memory-browser-title">
+    <form method="dialog" class="dialog-heading"><h2 id="memory-browser-title">Pamięć i persona</h2><button class="utility-button" aria-label="Zamknij przeglądarkę pamięci">✕</button></form>
+    <p class="muted">Tylko odczyt. Otwarcie panelu nie uruchamia modelu i nie zmienia pamięci. Wypowiedzi modelu i jego wspomnienia nie są dowodem wykonania działań.</p>
+    <div class="settings-row">
+      <button id="memory-sessions" class="utility-button" type="button" aria-pressed="true">Sesje i wspomnienia</button>
+      <button id="memory-persona" class="utility-button" type="button" aria-pressed="false">Persona</button>
+      <button id="memory-refresh" class="utility-button" type="button">Odśwież</button>
+    </div>
+    <p id="memory-browser-status" role="status"></p>
+    <label id="memory-session-label">Sesja <select id="memory-session-select"></select></label>
+    <div id="memory-browser-content"></div>
   </dialog>
   <div id="shutdown-notice" class="shutdown-notice hidden" role="status"></div>
   <script src="/assets/app.js?v=__DARKLINGER_ASSET_VERSION__" defer></script>

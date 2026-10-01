@@ -371,6 +371,12 @@ h2 { margin-top: 4px; font: 720 22px/1.1 var(--sans); }
 .owner-deck summary { cursor: pointer; color: #c0d4c7; font: 12px var(--mono); }
 dialog { width: min(690px, calc(100vw - 28px)); max-height: 88dvh; overflow-y: auto; padding: 24px; color: #deeadf; background: #101813; border: 1px solid #5c8457; border-radius: 12px; box-shadow: 0 20px 100px #000b; }
 dialog::backdrop { background: #000b; backdrop-filter: blur(4px); }
+#memory-browser-dialog { width: min(900px, calc(100vw - 28px)); }
+#memory-browser-content pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.65 var(--mono); }
+#memory-browser-content section { border-top: 1px solid #38503a; padding: 10px 0; }
+#memory-session-select { max-width: 100%; margin: 10px 0; }
+#memory-browser-status { font-size: 13px; line-height: 1.6; }
+#memory-browser-dialog [aria-pressed="true"] { border-color: var(--acid); color: var(--acid); }
 .dialog-heading { display: flex; justify-content: space-between; align-items: center; gap: 18px; }
 .dialog-heading h2 { margin: 0; }
 dialog .muted { font-size: 12px; line-height: 1.6; }

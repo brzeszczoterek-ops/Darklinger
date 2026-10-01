@@ -22,6 +22,7 @@ from v_core.speech.settings import SpeechSettings
 from v_core.memory.memoir import SessionMemoir, current_memoir_turn
 from v_core.response_preview import response_preview
 from v_core.ui.runtime_activity import runtime_activity, model_log
+from v_core.ui.memory_browser import browse
 
 
 _STATIC_ROOT = Path(__file__).with_name("static")
@@ -191,6 +192,20 @@ def create_app(runtime: UIRuntime) -> Starlette:
         if denied is not None:
             return denied
         return JSONResponse(runtime.status(), headers={"Cache-Control": "no-store"})
+
+    async def memory_browser(request: Request) -> Response:
+        denied = runtime.require_token(request)
+        if denied is not None:
+            return denied
+        try:
+            payload = browse(runtime, view=request.query_params.get("view", "sessions"),
+                             session_id=request.query_params.get("session", "current"))
+            code = 200
+        except PermissionError:
+            payload, code = {"error": "Brak dostępu do archiwum w tej edycji."}, 403
+        except (OSError, ValueError, UnicodeError):
+            payload, code = {"error": "Nie można odczytać danych: plik niedostępny, nieprawidłowy lub zbyt duży."}, 400
+        return JSONResponse(payload, status_code=code, headers={"Cache-Control": "no-store"})
 
     async def chat(request: Request) -> Response:
         denied = runtime.require_token(request)
@@ -449,6 +464,7 @@ def create_app(runtime: UIRuntime) -> Starlette:
         routes=[
             Route("/", index, methods=["GET"]),
             Route("/api/status", status, methods=["GET"]),
+            Route("/api/memory/browser", memory_browser, methods=["GET"]),
             Route("/api/model/log", log, methods=["GET"]),
             Route("/api/voice/settings", voice_settings, methods=["GET", "POST"]),
             Route("/api/voice/install", voice_install, methods=["POST"]),

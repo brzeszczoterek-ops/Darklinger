@@ -7,3 +7,10 @@ Required checks include matching package/runtime versions, rejection of incomple
 Unit tests and fixture tests are not proof of live model behavior. Before release, test long conversations, a multi-step tool task, output-budget exhaustion, and provider failure on a selected local model. Verify that the UI does not present partial output as success.
 
 Publication and deployment are separate steps after these checks.
+
+The read-only memory/persona browser must expose only the current UI session in
+Public, including rejection of explicit archive IDs at the API boundary. Check
+session-token protection, no-store responses, text-only rendering and clear
+labels separating recorded conversation, unverified memoirs and persona preview.
+Opening the browser must not invoke a model or write memory. Editing/deletion
+and browsing durable memory are not implemented in this first slice.
