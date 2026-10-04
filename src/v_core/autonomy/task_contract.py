@@ -254,7 +254,18 @@ _MUTATE_FILE = re.compile(
     re.IGNORECASE,
 )
 _RUN_COMMAND = re.compile(
-    r"\b(?:execute|run|test|uruchom\w*|wykonaj\w*|przetestuj\w*)\b",
+    r"\b(?:execute|run|uruchom\w*|wykonaj\w*|przetestuj\w*)\b",
+    re.IGNORECASE,
+)
+_TEST_IMPERATIVE = re.compile(
+    r"(?:^|[.!?;\n]\s*|\b(?:and|then)\s+)\s*"
+    r"(?:(?:please|(?:can|could|would|will)\s+you)\s+)*test\s+"
+    r"(?:this|that|the|these|those|my|our|your|a|an)\s+",
+    re.IGNORECASE,
+)
+_WITHOUT_TOOLS = re.compile(
+    r"\b(?:bez\s+(?:użycia\s+)?narzędzi|without\s+(?:using\s+)?tools|"
+    r"do\s+not\s+use\s+(?:any\s+)?tools|don't\s+use\s+(?:any\s+)?tools)\b",
     re.IGNORECASE,
 )
 _COMMAND_TARGET = re.compile(
@@ -267,11 +278,10 @@ _COMMAND_TARGET = re.compile(
 def _requests_command_execution(prompt: str) -> bool:
     """Require a command action and target that are distinct lexical spans.
 
-    ``test`` can be both a verb and a noun. Matching the two patterns
-    independently made passive content such as a filename or Markdown heading
-    containing "smoke test" require an unrelated sandbox execution. Genuine
-    requests such as "run the test" and "test this script" still contain two
-    distinct spans.
+    ``test`` is also a noun in English and Polish. Two distinct occurrences
+    ("test ... testowej") are not evidence of an imperative. Accept that verb
+    only in an explicit request shape. This heuristic creates requirements,
+    not permission to execute anything.
     """
 
     # Path components are data: two paths beneath test/ do not constitute
@@ -281,11 +291,19 @@ def _requests_command_execution(prompt: str) -> bool:
         " ",
         prompt,
     )
+    if _WITHOUT_TOOLS.search(command_text):
+        return False
     actions = tuple(_RUN_COMMAND.finditer(command_text))
     targets = tuple(_COMMAND_TARGET.finditer(command_text))
-    return any(
+    explicit_action = any(
         action.span() != target.span()
         for action in actions
+        for target in targets
+    )
+    return explicit_action or any(
+        target.start() >= action.end()
+        and not re.search(r"[.!?;\n]", command_text[action.end():target.start()])
+        for action in _TEST_IMPERATIVE.finditer(command_text)
         for target in targets
     )
 _FILE_TARGET = re.compile(

@@ -3244,6 +3244,33 @@ def test_explicit_test_execution_still_requires_command_execution() -> None:
     assert contract.requires_command_execution is True
 
 
+@pytest.mark.parametrize("prompt", [
+    "Cześć V. To krótki test panelu pamięci. Hasło naszej testowej rozmowy to BURSZTYN-42. Odpowiedz jednym zdaniem po polsku, bez narzędzi.",
+    "To krótki test panelu pamięci. Hasło naszej testowej rozmowy to BURSZTYN-42.",
+    "This is a test of the test panel. Reply briefly.",
+    "The test checks another test; explain the result.",
+    "Discuss how to test this script, without tools.",
+    "Please test this script without using tools.",
+    "Uruchom test skryptu, bez użycia narzędzi.",
+    "Do not test this script. Just explain it.",
+])
+def test_test_mentions_do_not_force_commands(prompt: str) -> None:
+    contract = TaskContract.from_prompt(prompt)
+    assert not contract.requires_command_execution
+    assert "command_execution" not in contract.unmet([])
+
+
+@pytest.mark.parametrize("prompt", [
+    "Test this script.", "Please test the script.",
+    "Can you test this script?", "Please test the smoke tests.",
+    "Read the script and then test the script.",
+    "Run the smoke test with pytest.", "Uruchom testy skryptu.",
+    "Przetestuj ten skrypt.",
+])
+def test_explicit_test_commands_remain_required(prompt: str) -> None:
+    assert TaskContract.from_prompt(prompt).requires_command_execution
+
+
 def test_created_tool_execution_satisfies_its_execution_requirement() -> None:
     contract = TaskContract(
         requires_command_execution=True,
