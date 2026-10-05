@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/branding/darklinger-logo.png" alt="Darklinger" width="760">
+</p>
+
 # Darklinger / V-Core
 
 **Darklinger** is the new public identity of the project previously released
