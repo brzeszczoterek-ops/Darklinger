@@ -9,10 +9,27 @@ const byId = (id) => document.getElementById(id);
 // Memory content is untrusted text. Never render it as HTML or execute it.
 let memoryView = "sessions";
 let memoryRequest = 0;
+const expiredPanelMessage = "This panel belongs to a previous Darklinger run. Reload the page or open a new panel.";
+function memoryConnectionMessage() {
+  const state = shuttingDown
+    ? "Darklinger is shut down."
+    : "Cannot connect to Darklinger. The application may be shut down.";
+  return `${state} To view saved memoirs, restart Darklinger and open a new panel.`;
+}
 async function memoryGet(query) {
-  const response = await fetch(`/api/memory/browser?${new URLSearchParams(query)}`, {headers, cache: "no-store"});
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "Nie udało się odczytać pamięci.");
+  let response;
+  try {
+    response = await fetch(`/api/memory/browser?${new URLSearchParams(query)}`, {headers, cache: "no-store"});
+  } catch (_error) {
+    throw new Error(memoryConnectionMessage());
+  }
+  let data;
+  try { data = await response.json(); }
+  catch (_error) { throw new Error(`Could not read the memory panel response (HTTP ${response.status}).`); }
+  if (response.status === 403 && data.error === "invalid local UI session") {
+    throw new Error(expiredPanelMessage);
+  }
+  if (!response.ok) throw new Error(data.error || "Could not read memory.");
   return data;
 }
 function memorySection(title, text) {
@@ -29,7 +46,7 @@ async function renderMemory(refreshList = true) {
   const status = byId("memory-browser-status");
   const content = byId("memory-browser-content");
   content.replaceChildren();
-  status.textContent = "Odczytywanie…";
+  status.textContent = "Loading…";
   byId("memory-session-label").hidden = memoryView !== "sessions";
   byId("memory-sessions").setAttribute("aria-pressed", String(memoryView === "sessions"));
   byId("memory-persona").setAttribute("aria-pressed", String(memoryView === "persona"));
@@ -39,7 +56,7 @@ async function renderMemory(refreshList = true) {
       if (request !== memoryRequest) return;
       status.textContent = data.notice;
       for (const section of data.sections) memorySection(section.title, section.text);
-      if (!data.sections.length) memorySection("Persona", "Persona nie jest jeszcze dostępna w tym runtime.");
+      if (!data.sections.length) memorySection("Persona", "Persona is not available in this runtime yet.");
       return;
     }
     const select = byId("memory-session-select");
@@ -55,24 +72,24 @@ async function renderMemory(refreshList = true) {
         select.append(option);
       }
       if (data.sessions.some((s) => s.id === previous)) select.value = previous;
-      select.dataset.scope = data.archive_allowed ? "Archiwum lokalnego profilu." : "Public: tylko bieżąca sesja.";
-      if (data.limited) select.dataset.scope += " Lista ograniczona: maks. 100 archiwów z 1000 sprawdzonych wpisów.";
+      select.dataset.scope = data.archive_allowed ? "Local profile archive." : "Public: current session only.";
+      if (data.limited) select.dataset.scope += " List limited to 100 archives from 1,000 scanned entries.";
     }
     if (!select.value) {
-      status.textContent = "Magazyn sesji nie jest dostępny.";
+      status.textContent = "Session storage is unavailable.";
       return;
     }
     const data = await memoryGet({view: "session", session: select.value});
     if (request !== memoryRequest) return;
-    if (!data.available) { status.textContent = "Sesja niedostępna."; return; }
+    if (!data.available) { status.textContent = "Session unavailable."; return; }
     const record = data.record;
-    const states = {idle: "jeszcze niezapisane", saving: "zapisywanie", saved: "zapisane", error: "błąd zapisu", empty: "pusta sesja"};
-    status.textContent = `${select.dataset.scope} Wspomnienie: ${states[data.save_state] || data.save_state}.`;
-    memorySection("Wspomnienie sesji", record.memory || "Brak zapisanego wspomnienia. Poniżej zapis bieżącej rozmowy, nie jej podsumowanie.");
-    memorySection("Pochodzenie", `Sesja: ${record.session_id}\nPoczątek: ${record.started_at}\nŹródło: ${record.source}\nPodsumowanie nie jest zweryfikowanym faktem.\nOdwołania do tur: ${record.turn_ids.join(", ") || "brak"}${record.partial_excerpts ? "\nPodsumowanie powstało z ograniczonych fragmentów." : ""}${record.fallback_reason ? `\nPrzyczyna zapisu zastępczego: ${record.fallback_reason}` : ""}`);
-    if (record.omitted_turns) memorySection("Ograniczenie podglądu", `Pominięto ${record.omitted_turns} wcześniejszych tur. Pokazujemy ostatnie 50; długie pola są oznaczone jako skrócone.`);
+    const states = {idle: "not saved yet", saving: "saving", saved: "saved", error: "save error", empty: "empty session"};
+    status.textContent = `${select.dataset.scope} Memoir: ${states[data.save_state] || data.save_state}.`;
+    memorySection("Session memoir", record.memory || "No saved memoir. The current conversation transcript is shown below, not a summary.");
+    memorySection("Provenance", `Session: ${record.session_id}\nStarted: ${record.started_at}\nSource: ${record.source}\nThe summary is not verified evidence.\nReferenced turns: ${record.turn_ids.join(", ") || "none"}${record.partial_excerpts ? "\nThe summary was generated from limited excerpts." : ""}${record.fallback_reason ? `\nFallback reason: ${record.fallback_reason}` : ""}`);
+    if (record.omitted_turns) memorySection("View limit", `${record.omitted_turns} earlier turns omitted. Showing the last 50; long fields are marked as truncated.`);
     for (const turn of record.turns) {
-      memorySection(`Tura ${turn.id ?? "?"} · ${turn.at} · ${turn.status}`, `Ty:\n${turn.user}\n\nV — zapis wypowiedzi, nie potwierdzenie wykonania:\n${turn.assistant}`);
+      memorySection(`Turn ${turn.id ?? "?"} · ${turn.at} · ${turn.status}`, `You:\n${turn.user}\n\nV — recorded statement, not proof of execution:\n${turn.assistant}`);
     }
   } catch (error) {
     if (request === memoryRequest) status.textContent = error.message;
@@ -136,6 +153,61 @@ let working = false;
 let recording = false;
 let lastReady = null;
 let requestInFlight = false;
+let uploadingMedia = false;
+let attachments = [];
+
+function renderAttachments() {
+  const list = byId("media-attachments");
+  list.replaceChildren();
+  attachments.forEach((file, index) => {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "utility-button";
+    remove.textContent = `${file.name} ×`;
+    remove.disabled = working || uploadingMedia;
+    remove.onclick = () => { attachments.splice(index, 1); renderAttachments(); };
+    list.append(remove);
+  });
+}
+byId("media-attach").onclick = () => byId("media-file").click();
+byId("media-file").addEventListener("change", async (event) => {
+  if (working || uploadingMedia) return;
+  uploadingMedia = true;
+  byId("media-attach").disabled = true;
+  ui.send.disabled = true;
+  const status = byId("media-status");
+  status.hidden = false;
+  try {
+    for (const file of event.target.files) {
+      if (file.size > 64 * 1024 * 1024) throw new Error("Attachment exceeds 64 MiB");
+      status.textContent = `Attaching ${file.name}…`;
+      const response = await fetch(`/api/perception/upload?name=${encodeURIComponent(file.name)}`, {
+        method: "POST", headers: {...headers, "Content-Type": "application/octet-stream"}, body: file,
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Attachment failed");
+      attachments.push(result);
+    }
+    status.textContent = "Attached locally. Send a message to inspect these files.";
+  } catch (error) { status.textContent = error.message; }
+  finally {
+    uploadingMedia = false;
+    event.target.value = "";
+    byId("media-attach").disabled = working;
+    ui.send.disabled = working;
+    renderAttachments();
+  }
+});
+byId("perception-open").onclick = async () => {
+  byId("perception-dialog").showModal();
+  const status = byId("perception-status");
+  status.textContent = "Checking local configuration…";
+  try {
+    const result = await api("/api/perception/status");
+    const vision = result.vision.managed_vision_configured || result.vision.external_local_endpoint_configured;
+    status.textContent = `PDF text: available. Image model: ${vision ? "configured" : "not separately configured"}. Speech recognition: ${result.speech_configured ? "configured" : "not configured"}. Other sounds: ${result.sound_model_configured ? "configured; capability checked on use" : "not configured"}.`;
+  } catch (error) { status.textContent = error.message; }
+};
 
 function clock() {
   return new Date().toLocaleTimeString("en-GB", {hour12: false});
@@ -169,6 +241,36 @@ function formatDuration(total) {
   const minutes = Math.floor((seconds % 3600) / 60).toString().padStart(2, "0");
   const rest = Math.floor(seconds % 60).toString().padStart(2, "0");
   return hours ? `${hours}:${minutes}:${rest}` : `${minutes}:${rest}`;
+}
+
+function renderToolJobs(supervision) {
+  const container = byId("tool-jobs");
+  if (!container) return;
+  const jobs = (supervision?.jobs || []).slice(-12);
+  container.replaceChildren();
+  if (!jobs.length) { container.textContent = "No jobs."; return; }
+  const labels = {queued: "Queued", running: "Running", stopping: "Stopping", succeeded: "Completed", failed: "Failed", cancelled: "Cancelled"};
+  const phases = {waiting_network: "Waiting for network", receiving_data: "Receiving data", process_started: "Process started", process_stopped: "Process exited", browser_starting: "Starting browser", waiting_for_page: "Waiting for page", observing_page: "Reading page", page_observed: "Page observed", sandbox_running: "Running in sandbox", sandbox_output: "Receiving sandbox output"};
+  for (const job of jobs) {
+    const row = document.createElement("article");
+    row.className = "proposal";
+    const text = document.createElement("p");
+    text.textContent = `${job.tool}: ${labels[job.state] || job.state} · ${phases[job.phase] || labels[job.phase] || "Waiting for result"} · ${job.elapsed_seconds}s`;
+    if (job.signals?.bytes_received !== undefined) text.textContent += ` · received ${job.signals.bytes_received} B`;
+    row.append(text);
+    if (["queued", "running"].includes(job.state)) {
+      const stop = document.createElement("button");
+      stop.type = "button";
+      stop.textContent = "Stop job";
+      stop.onclick = async () => {
+        stop.disabled = true;
+        try { await api(`/api/tool-jobs/${encodeURIComponent(job.job_id)}/cancel`, {}); }
+        catch (error) { text.textContent = error.message; stop.disabled = false; }
+      };
+      row.append(stop);
+    }
+    container.append(row);
+  }
 }
 
 function renderRuntimeActivity(activity) {
@@ -261,7 +363,9 @@ function formatUptime(total) {
 function setWorking(value) {
   working = value;
   ui.prompt.disabled = value;
-  ui.send.disabled = value;
+  ui.send.disabled = value || uploadingMedia;
+  byId("media-attach").disabled = value || uploadingMedia;
+  renderAttachments();
   ui.ptt.disabled = value && !recording;
   ui.orb.classList.toggle("busy", value);
   ui.runtime.className = `status-pill ${value ? "busy" : "ready"}`;
@@ -341,7 +445,7 @@ function renderOwner(owner) {
 async function refreshStatus() {
   try {
     const response = await fetch("/api/status", {headers, cache: "no-store"});
-    if (!response.ok) throw new Error(`status ${response.status}`);
+    if (!response.ok) throw Object.assign(new Error(`status ${response.status}`), {httpStatus: response.status});
     const state = await response.json();
     if (state.closing) showShutdown(state.memoir);
     ui.edition.textContent = state.edition.toUpperCase();
@@ -360,6 +464,7 @@ async function refreshStatus() {
     ui.pttLabel.textContent = recording ? "STOP & TRANSCRIBE" : "F2 / PUSH TO TALK";
     renderOwner(state.owner);
     renderRuntimeActivity(state.activity);
+    renderToolJobs(state.tool_supervision);
     if (!requestInFlight) setWorking(!state.ready);
     if (lastReady !== state.ready) {
       feed(state.ready ? "Runtime ready" : "Runtime entered active task");
@@ -369,12 +474,28 @@ async function refreshStatus() {
     ui.runtime.className = "status-pill";
     ui.runtime.innerHTML = shuttingDown ? "<i></i> STOPPED" : "<i></i> LINK LOST";
     ui.entity.textContent = shuttingDown ? "CLOSED" : "CONNECTION LOST";
+    const explanation = error.httpStatus === 403 ? expiredPanelMessage
+      : error.httpStatus ? `The Darklinger panel returned HTTP ${error.httpStatus}. Try reloading the page.`
+      : memoryConnectionMessage();
+    if (shuttingDown && !error.httpStatus) {
+      const notice = byId("shutdown-notice");
+      notice.classList.remove("hidden");
+      const saved = lastMemoirState.state === "saved"
+        ? (lastMemoirState.fallback ? "Fallback note saved. " : "Session memoir saved. ")
+        : "";
+      notice.textContent = saved + memoryConnectionMessage();
+    }
+    if (byId("memory-browser-dialog").open) {
+      byId("memory-browser-status").textContent = explanation;
+    }
   }
 }
 
 async function sendPrompt(text) {
-  const prompt = text.trim();
-  if (!prompt || working) return;
+  if (working || uploadingMedia) return;
+  const selected = attachments.slice();
+  const prompt = [text.trim(), ...selected.map(file => file.uri)].filter(Boolean).join("\n");
+  if (!prompt) return;
   message("user", prompt);
   const output = message("v", "");
   let showingDraft = false;
@@ -397,6 +518,8 @@ async function sendPrompt(text) {
       const body = await response.json();
       throw new Error(body.error || `request failed: ${response.status}`);
     }
+    attachments = attachments.filter(file => !selected.includes(file));
+    renderAttachments();
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -502,13 +625,17 @@ window.addEventListener("keydown", (event) => {
 });
 
 let shuttingDown = false;
+let lastMemoirState = {};
 function showShutdown(memoir = {}) {
+  shuttingDown = true;
+  ui.shutdown.disabled = true;
+  lastMemoirState = {...lastMemoirState, ...memoir};
   const notice = byId("shutdown-notice");
   notice.classList.remove("hidden");
   if (memoir.state === "saved") {
-    notice.textContent = `${memoir.fallback ? "Zapisano notatkę zastępczą" : "Zapisano wspomnienie"}: ${memoir.file}. Zamykanie…`;
+    notice.textContent = `${memoir.fallback ? "Fallback note saved" : "Memoir saved"}: ${memoir.file}. Closing…`;
   } else if (memoir.state === "error") notice.textContent = memoir.message;
-  else notice.textContent = "V zapisuje wspomnienie tej sesji (maks. 60 sekund). Awaryjny stop pomija ten zapis.";
+  else notice.textContent = "V is saving this session memoir (up to 60 seconds). Emergency stop skips this step.";
 }
 async function shutdown(emergency = false) {
   if (shuttingDown && !emergency) return;
@@ -517,16 +644,16 @@ async function shutdown(emergency = false) {
   try {
     const result = await api(`/api/shutdown${emergency ? "?emergency=1" : ""}`, {});
     showShutdown();
-    if (result.status === "shutting_down") byId("shutdown-notice").textContent = "Zamykanie Darklingera i modelu…";
+    if (result.status === "shutting_down") byId("shutdown-notice").textContent = "Closing Darklinger and the model…";
   } catch (error) {
-    feed(`Nie udało się zamknąć: ${error.message}`);
+    feed(`Could not shut down: ${error.message}`);
     shuttingDown = false;
     ui.shutdown.disabled = false;
   }
 }
 ui.shutdown.addEventListener("click", () => shutdown());
 byId("emergency-stop").addEventListener("click", () => {
-  if (window.confirm("Zatrzymać natychmiast, bez wspomnienia sesji?")) shutdown(true);
+  if (window.confirm("Stop immediately without saving a session memoir?")) shutdown(true);
 });
 
 async function api(path, body) {
@@ -542,7 +669,7 @@ let logPaused = false;
 let logBusy = false;
 byId("log-pause").addEventListener("click", () => {
   logPaused = !logPaused;
-  byId("log-pause").textContent = logPaused ? "Wznów" : "Pauza";
+  byId("log-pause").textContent = logPaused ? "Resume" : "Pause";
   byId("log-pause").setAttribute("aria-pressed", String(logPaused));
   if (!logPaused) refreshLog();
 });
@@ -551,14 +678,14 @@ async function refreshLog() {
   logBusy = true;
   try {
     const result = await api("/api/model/log");
-    byId("log-source").textContent = result.source || "Backend bez lokalnego logu";
+    byId("log-source").textContent = result.source || "Backend has no local log";
     const console = byId("model-log");
     if (console.textContent !== result.text) {
       const position = console.scrollTop;
-      console.textContent = result.text || "Log jest jeszcze pusty.";
+      console.textContent = result.text || "The log is still empty.";
       console.scrollTop = byId("log-follow").checked ? console.scrollHeight : position;
     }
-  } catch (error) { byId("log-source").textContent = `Log niedostępny: ${error.message}`; }
+  } catch (error) { byId("log-source").textContent = `Log unavailable: ${error.message}`; }
   finally { logBusy = false; }
 }
 
@@ -570,8 +697,8 @@ function voiceMessage(text) { byId("voice-settings-message").textContent = text;
 function options(id, items, value) {
   const select = byId(id);
   select.replaceChildren();
-  if (!items.length) items = [{id: "", label: "Brak — zainstaluj lub skonfiguruj najpierw"}];
-  else if (!items.some((item) => item.id === value)) items = [{id: "", label: "Bieżący wybór niedostępny — wybierz z listy"}, ...items];
+  if (!items.length) items = [{id: "", label: "None — install or configure first"}];
+  else if (!items.some((item) => item.id === value)) items = [{id: "", label: "Current selection unavailable — choose from the list"}, ...items];
   for (const item of items) select.add(new Option(item.label, item.id));
   select.value = items.some((item) => item.id === value) ? value : "";
 }
@@ -593,17 +720,17 @@ function renderVoice(state, replace = false) {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "utility-button";
-      button.textContent = item.installed ? "Zainstalowany" : "Pobierz";
+      button.textContent = item.installed ? "Installed" : "Download";
       button.dataset.installed = String(item.installed);
       button.addEventListener("click", () => installVoice("model", item.id,
-        `Pobrać ${item.label} (${Math.round(item.bytes / 1024 / 1024)} MiB) z Hugging Face?`));
+        `Download ${item.label} (${Math.round(item.bytes / 1024 / 1024)} MiB) from Hugging Face?`));
       row.append(label, button);
       downloads.append(row);
     }
   }
   byId("voice-save").disabled = state.installing;
   byId("whisper-install-engine").disabled = state.installing || state.cpu_engine_installed;
-  byId("whisper-install-engine").textContent = state.cpu_engine_installed ? "whisper.cpp CPU zainstalowany" : "Zainstaluj whisper.cpp CPU";
+  byId("whisper-install-engine").textContent = state.cpu_engine_installed ? "whisper.cpp CPU installed" : "Install whisper.cpp CPU";
   byId("whisper-downloads").querySelectorAll("button").forEach((button) => {
     button.disabled = state.installing || button.dataset.installed === "true";
   });
@@ -639,13 +766,13 @@ byId("voice-settings-form").addEventListener("submit", async (event) => {
   }
   try {
     renderVoice(await api("/api/voice/settings", payload), true);
-    voiceMessage("Zapisano. Nowe ustawienia obowiązują od następnego nagrania lub wypowiedzi.");
+    voiceMessage("Saved. New settings apply to the next recording or spoken response.");
   } catch (error) { voiceMessage(error.message); }
 });
 byId("voice-preview").addEventListener("click", async () => {
   byId("voice-preview").disabled = true;
-  voiceMessage("Odtwarzanie zapisanego głosu…");
-  try { await api("/api/voice/preview", {}); voiceMessage("Próbka zakończona."); }
+  voiceMessage("Playing saved voice…");
+  try { await api("/api/voice/preview", {}); voiceMessage("Preview complete."); }
   catch (error) { voiceMessage(error.message); }
   finally { byId("voice-preview").disabled = false; }
 });
@@ -653,12 +780,12 @@ async function installVoice(kind, id, question) {
   if (voiceInstalling || !window.confirm(question)) return;
   try {
     await api("/api/voice/install", {kind, id});
-    voiceMessage("Instalacja uruchomiona. Bieżące ustawienia pozostają bez zmian.");
+    voiceMessage("Installation started. Current settings are unchanged.");
     await refreshVoice();
   } catch (error) { voiceMessage(error.message); }
 }
 byId("whisper-install-engine").addEventListener("click", () => installVoice("engine", "cpu",
-  "Pobrać źródła whisper.cpp v1.8.3 z GitHub i zbudować silnik CPU lokalnie? Wymaga co najmniej 1 GB wolnego miejsca; może potrwać kilka minut."));
+  "Download whisper.cpp v1.8.3 source from GitHub and build the CPU engine locally? Requires at least 1 GB of free space and may take several minutes."));
 byId("voice-install-cancel").addEventListener("click", async () => {
   try { await api("/api/voice/install/cancel", {}); await refreshVoice(true); }
   catch (error) { voiceMessage(error.message); }
@@ -670,3 +797,117 @@ setInterval(refreshLog, 1500);
 refreshStatus();
 setInterval(refreshStatus, 2000);
 ui.prompt.focus();
+
+
+const modelTestsDialog = byId("model-tests-dialog");
+let modelTestsBusy = false;
+let modelTestsSelected = "";
+let modelTestsSignature = "";
+function testNode(tag, text, parent) {
+  const node = document.createElement(tag);
+  if (text !== undefined) node.textContent = String(text);
+  if (parent) parent.append(node);
+  return node;
+}
+function renderModelTests(run) {
+  const container = byId("model-tests-content");
+  if (!run) {
+    byId("model-tests-status").textContent = "No transcripts yet. Earlier qualification cards contain scores only; questions and replies are saved from the next qualification.";
+    container.replaceChildren();
+    modelTestsSignature = "";
+    return;
+  }
+  const status = run.state === "completed" ? `Completed · ${run.overall_score}/100`
+    : run.state === "unfinished" ? "In progress / no final result recorded" : run.state;
+  byId("model-tests-status").textContent = `${run.alias || run.model_path} · ${status} · ${run.completed}/${run.total} tests finished · Last update: ${new Date(run.updated_at).toLocaleString()}`
+    + (run.error ? ` · ${run.error}` : "")
+    + (run.truncated || run.incomplete_line ? " · Some log data is incomplete or omitted." : "");
+  const signature = JSON.stringify([run.run_id, run.updated_at, run.events.length, run.incomplete_line]);
+  for (const waiting of container.querySelectorAll(".model-test-waiting")) {
+    const elapsed = Math.max(0, Math.floor((Date.now() - Date.parse(waiting.dataset.started)) / 1000));
+    waiting.textContent = `Waiting for model reply… ${elapsed} s`;
+  }
+  if (signature === modelTestsSignature) return;
+  const known = new Set([...container.querySelectorAll("details")].map(node => node.dataset.key));
+  const sameRun = container.dataset.runId === run.run_id;
+  const opened = new Set([...container.querySelectorAll("details[open]")].map(node => node.dataset.key));
+  container.replaceChildren();
+  container.dataset.runId = run.run_id;
+  modelTestsSignature = signature;
+  const probes = new Map();
+  const requests = new Map();
+  const results = new Map(run.events.filter(event => event.event === "probe_finished").map(event => [event.probe, event.result]));
+  for (const event of run.events) {
+    if (event.event === "probe_started") {
+      const section = testNode("details", undefined, container);
+      section.dataset.key = `probe:${event.probe}`;
+      section.open = sameRun && known.has(section.dataset.key) ? opened.has(section.dataset.key) : !results.has(event.probe);
+      const result = results.get(event.probe);
+      testNode("summary", `${event.index}/${event.total} · ${event.probe} · ${result ? `${result.score}/100 (${result.passed ? "passed" : "failed"})` : "waiting"}`, section);
+      if (result) testNode("p", `${result.detail} · ${(result.latency_ms / 1000).toFixed(1)} s`, section);
+      probes.set(event.probe, section);
+    } else if (event.event === "request_started") {
+      const parent = probes.get(event.probe) || container;
+      const request = testNode("section", undefined, parent);
+      requests.set(event.request_id, request);
+      testNode("h3", `Request ${event.request_id} · attempt ${event.attempt}`, request);
+      if (event.truncated) testNode("p", event.detail, request);
+      for (const message of event.messages || []) {
+        testNode("h4", message.role || "message", request);
+        testNode("pre", typeof message.content === "string" ? message.content : JSON.stringify(message.content, null, 2), request);
+      }
+      if ((event.tools || []).length) {
+        const schemas = testNode("details", undefined, request);
+        schemas.dataset.key = `tools:${event.request_id}`;
+        schemas.open = sameRun && opened.has(schemas.dataset.key);
+        testNode("summary", "Available simulated tools", schemas);
+        testNode("pre", JSON.stringify(event.tools, null, 2), schemas);
+      }
+      const waiting = testNode("p", "Waiting for model reply…", request);
+      waiting.className = "model-test-waiting";
+      waiting.dataset.started = event.timestamp;
+    } else if (event.event === "response_received") {
+      const request = requests.get(event.request_id) || probes.get(event.probe) || container;
+      request.querySelector(".model-test-waiting")?.remove();
+      testNode("h4", "Model reply", request);
+      if (event.truncated) { testNode("p", event.detail, request); continue; }
+      testNode("pre", event.response.content || "(No prose reply)", request);
+      if (event.response.tool_calls.length) {
+        testNode("h4", "Requested simulated actions", request);
+        testNode("pre", JSON.stringify(event.response.tool_calls, null, 2), request);
+      }
+      testNode("p", `Finish: ${event.response.finish_reason || "unknown"} · ${(event.latency_ms / 1000).toFixed(1)} s`, request);
+    } else if (event.event === "request_failed") {
+      const request = requests.get(event.request_id) || probes.get(event.probe) || container;
+      request.querySelector(".model-test-waiting")?.remove();
+      testNode("p", `Request failed: ${event.error || event.detail}`, request);
+    }
+  }
+}
+async function refreshModelTests() {
+  if (modelTestsBusy || !modelTestsDialog.open) return;
+  modelTestsBusy = true;
+  try {
+    const result = await api(`/api/model/tests${modelTestsSelected ? `?run_id=${encodeURIComponent(modelTestsSelected)}` : ""}`);
+    const select = byId("model-tests-run");
+    select.replaceChildren();
+    const latest = testNode("option", "Latest run (follow)", select);
+    latest.value = "";
+    for (const run of result.runs) {
+      const option = testNode("option", `${run.alias || run.model_path} · ${new Date(run.started_at).toLocaleString()} · ${run.state}`, select);
+      option.value = run.run_id;
+    }
+    select.value = modelTestsSelected;
+    renderModelTests(result.selected);
+  } catch (error) { byId("model-tests-status").textContent = `Test preview unavailable: ${error.message}`; }
+  finally { modelTestsBusy = false; }
+}
+byId("model-tests-open").addEventListener("click", () => {
+  modelTestsDialog.showModal();
+  refreshModelTests();
+});
+byId("model-tests-run").addEventListener("change", event => {
+  modelTestsSelected = event.target.value;
+  refreshModelTests();
+});
+setInterval(refreshModelTests, 1500);

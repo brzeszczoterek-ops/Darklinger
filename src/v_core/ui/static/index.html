@@ -21,13 +21,15 @@
       <div class="topbar-status">
         <span id="edition-badge" class="badge">PUBLIC</span>
         <span id="runtime-state" class="status-pill"><i></i> INITIALIZING</span>
-        <button id="voice-settings-open" class="utility-button" type="button">GŁOS I WHISPER</button>
-        <button id="memory-browser-open" class="utility-button" type="button">PAMIĘĆ I PERSONA</button>
-        <button id="shutdown" class="shutdown" type="button" title="Zapisz wspomnienie sesji i zamknij Darklingera">
-          ZAPISZ I WYJDŹ
+        <button id="voice-settings-open" class="utility-button" type="button">VOICE & WHISPER</button>
+        <button id="model-tests-open" class="utility-button" type="button">MODEL TESTS</button>
+        <button id="memory-browser-open" class="utility-button" type="button">MEMORY & PERSONA</button>
+        <button id="perception-open" class="utility-button" type="button">PERCEPTION</button>
+        <button id="shutdown" class="shutdown" type="button" title="Save the session memoir and close Darklinger">
+          SAVE & EXIT
           <span class="shutdown-progress"></span>
         </button>
-        <button id="emergency-stop" class="utility-button danger" type="button" title="Natychmiast zatrzymaj Darklingera i model, bez wspomnienia">AWARYJNY STOP</button>
+        <button id="emergency-stop" class="utility-button danger" type="button" title="Stop Darklinger and the model immediately without saving a memoir">EMERGENCY STOP</button>
       </div>
     </header>
 
@@ -83,7 +85,11 @@
 
       <form id="composer" class="composer">
         <textarea id="prompt" rows="2" maxlength="65536" placeholder="Give V a task…" aria-label="Message to V"></textarea>
+        <input id="media-file" type="file" accept=".jpg,.jpeg,.png,.webp,.pdf,.wav,.mp3,.m4a,.ogg,.flac,.aac" multiple hidden>
+        <div id="media-attachments" class="chip-list" aria-label="Attached media"></div>
+        <p id="media-status" role="status" class="muted" hidden></p>
         <div class="composer-actions">
+          <button id="media-attach" class="utility-button" type="button">ATTACH MEDIA</button>
           <button id="ptt" class="ptt" type="button">
             <span class="mic-dot"></span>
             <span id="ptt-label">F2 / PUSH TO TALK</span>
@@ -119,6 +125,7 @@
         </div>
         <div class="live-context-track"><span id="live-context-meter"></span></div>
         <p id="live-objective" class="live-objective">Waiting for an objective.</p>
+        <section aria-label="Background tool jobs"><h3>BACKGROUND JOBS</h3><div id="tool-jobs">No jobs.</div></section>
         <div id="live-action" class="live-action">LAST ACTION // —</div>
         <ol id="runtime-feed" class="runtime-feed">
           <li><time>00:00:00</time><span>UI channel established</span></li>
@@ -126,14 +133,14 @@
       </section>
 
       <section class="panel model-console">
-        <div class="live-heading"><h2>LLAMA.CPP // LIVE LOG</h2><button id="log-pause" type="button" class="utility-button" aria-pressed="false">Pauza</button></div>
-        <div class="console-controls"><span id="log-source" class="muted">Łączenie z logiem…</span><label><input id="log-follow" type="checkbox" checked> Przewijaj</label></div>
-        <pre id="model-log" tabindex="0" aria-label="Bieżący log serwera modelu">Oczekiwanie na log…</pre>
-        <p class="muted">Ostatnie 250 linii rzeczywistego logu backendu. Podgląd, nie terminal poleceń.</p>
+        <div class="live-heading"><h2>LLAMA.CPP // LIVE LOG</h2><button id="log-pause" type="button" class="utility-button" aria-pressed="false">Pause</button></div>
+        <div class="console-controls"><span id="log-source" class="muted">Connecting to log…</span><label><input id="log-follow" type="checkbox" checked> Follow output</label></div>
+        <pre id="model-log" tabindex="0" aria-label="Live model server log">Waiting for log…</pre>
+        <p class="muted">Last 250 lines of the backend log. Read-only view, not a command terminal.</p>
       </section>
 
       <details id="owner-deck" class="panel owner-deck hidden">
-        <summary>Propozycje i uprawnienia <span id="proposal-count"></span></summary>
+        <summary>Proposals & permissions <span id="proposal-count"></span></summary>
         <div class="section-label capability-audit-label">SENSITIVE CAPABILITY LEDGER</div>
         <div id="capability-audit-list" class="capability-audit-list"></div>
         <div class="section-label proposal-label">V PROPOSES // OWNER DECIDES</div>
@@ -149,39 +156,54 @@
       </section>
     </aside>
   </div>
+  <dialog id="perception-dialog" aria-labelledby="perception-title">
+    <form method="dialog" class="dialog-heading"><h2 id="perception-title">Perception</h2><button class="utility-button" aria-label="Close perception">✕</button></form>
+    <p>Attach images, PDFs or recordings to a message. V reports the pages or audio windows it actually inspected.</p>
+    <p id="perception-status" role="status"></p>
+    <p class="muted">Configuration status does not prove a successful analysis. OCR and sound observations may need confirmation.</p>
+  </dialog>
+  <dialog id="model-tests-dialog" aria-labelledby="model-tests-title">
+    <form method="dialog" class="dialog-heading"><h2 id="model-tests-title">Model qualification tests</h2><button class="utility-button" aria-label="Close model tests">✕</button></form>
+    <p class="muted">Questions, model replies, simulated actions and runtime scores. Updates while open. Tool calls in these tests are simulated.</p>
+    <label for="model-tests-run">Qualification history</label>
+    <select id="model-tests-run"><option value="">Latest run (follow)</option></select>
+    <p id="model-tests-status" role="status">No qualification transcript loaded.</p>
+    <div id="model-tests-content"></div>
+  </dialog>
+
   <dialog id="voice-settings-dialog" aria-labelledby="voice-settings-title">
-    <form method="dialog" class="dialog-heading"><h2 id="voice-settings-title">Głos i Whisper</h2><button class="utility-button" aria-label="Zamknij ustawienia">✕</button></form>
-    <p class="muted">Ustawienia zapisywane lokalnie. Otworzenie panelu niczego nie pobiera ani nie zmienia.</p>
+    <form method="dialog" class="dialog-heading"><h2 id="voice-settings-title">Voice & Whisper</h2><button class="utility-button" aria-label="Close settings">✕</button></form>
+    <p class="muted">Settings are saved locally. Opening this panel does not download or change anything.</p>
     <form id="voice-settings-form" class="voice-settings-form">
-      <label>Głos V — zainstalowane głosy<select id="voice-choice" name="voice"></select></label>
-      <p class="muted">Język głosu zależy od modelu TTS. Język Whispera poniżej dotyczy wyłącznie rozpoznawania mowy.</p>
-      <label>Silnik Whisper<select id="whisper-engine" name="engine"></select></label>
-      <label>Model rozpoznawania mowy<select id="whisper-model" name="model"></select></label>
-      <div class="settings-row"><label>Język nagrania<select id="whisper-language" name="language"><option value="auto">Automatycznie</option><option value="pl">Polski</option><option value="en">English</option><option value="de">Deutsch</option><option value="fr">Français</option><option value="es">Español</option><option value="uk">Українська</option><option value="ru">Русский</option></select></label>
-      <label>Wątki CPU<input id="whisper-threads" name="threads" type="number" min="1" max="32" required></label></div>
-      <div class="settings-row"><button id="voice-save" class="send" type="submit">Zapisz ustawienia</button><button id="voice-preview" class="utility-button" type="button">Posłuchaj zapisanego głosu</button></div>
+      <label>V voice — installed voices<select id="voice-choice" name="voice"></select></label>
+      <p class="muted">The voice language depends on the TTS model. The Whisper language below applies only to speech recognition.</p>
+      <label>Whisper engine<select id="whisper-engine" name="engine"></select></label>
+      <label>Speech recognition model<select id="whisper-model" name="model"></select></label>
+      <div class="settings-row"><label>Recording language<select id="whisper-language" name="language"><option value="auto">Automatic</option><option value="pl">Polish</option><option value="en">English</option><option value="de">German</option><option value="fr">French</option><option value="es">Spanish</option><option value="uk">Ukrainian</option><option value="ru">Russian</option></select></label>
+      <label>CPU threads<input id="whisper-threads" name="threads" type="number" min="1" max="32" required></label></div>
+      <div class="settings-row"><button id="voice-save" class="send" type="submit">Save settings</button><button id="voice-preview" class="utility-button" type="button">Preview saved voice</button></div>
     </form>
-    <section class="voice-downloads"><h3>Instalacja Whispera</h3>
-      <p class="muted">Modele wielojęzyczne z repozytorium whisper.cpp. Pobranie nie przełącza aktualnego modelu. Nowy model wybierz powyżej i zapisz.</p>
+    <section class="voice-downloads"><h3>Whisper installation</h3>
+      <p class="muted">Multilingual models from the whisper.cpp repository. Downloading does not switch the active model. Select the new model above and save to use it.</p>
       <div id="whisper-downloads"></div>
-      <button id="whisper-install-engine" class="utility-button" type="button">Zainstaluj whisper.cpp CPU</button>
-      <p class="muted">Instalacja silnika wymaga git, cmake i kompilatora C++. Nie zmienia działającego silnika CUDA ani sterowników.</p>
+      <button id="whisper-install-engine" class="utility-button" type="button">Install whisper.cpp CPU</button>
+      <p class="muted">Engine installation requires git, cmake and a C++ compiler. It does not modify the existing CUDA engine or drivers.</p>
     </section>
     <p id="voice-settings-message" role="status"></p>
     <progress id="voice-install-progress" class="hidden" max="100"></progress>
-    <button id="voice-install-cancel" class="utility-button hidden" type="button">Przerwij instalację</button>
+    <button id="voice-install-cancel" class="utility-button hidden" type="button">Cancel installation</button>
     <pre id="voice-install-status" role="status"></pre>
   </dialog>
   <dialog id="memory-browser-dialog" aria-labelledby="memory-browser-title">
-    <form method="dialog" class="dialog-heading"><h2 id="memory-browser-title">Pamięć i persona</h2><button class="utility-button" aria-label="Zamknij przeglądarkę pamięci">✕</button></form>
-    <p class="muted">Tylko odczyt. Otwarcie panelu nie uruchamia modelu i nie zmienia pamięci. Wypowiedzi modelu i jego wspomnienia nie są dowodem wykonania działań.</p>
+    <form method="dialog" class="dialog-heading"><h2 id="memory-browser-title">Memory & persona</h2><button class="utility-button" aria-label="Close memory browser">✕</button></form>
+    <p class="muted">Read-only. Opening this panel does not run the model or modify memory. Model statements and memoirs are not evidence that actions were performed.</p>
     <div class="settings-row">
-      <button id="memory-sessions" class="utility-button" type="button" aria-pressed="true">Sesje i wspomnienia</button>
+      <button id="memory-sessions" class="utility-button" type="button" aria-pressed="true">Sessions & memoirs</button>
       <button id="memory-persona" class="utility-button" type="button" aria-pressed="false">Persona</button>
-      <button id="memory-refresh" class="utility-button" type="button">Odśwież</button>
+      <button id="memory-refresh" class="utility-button" type="button">Refresh</button>
     </div>
     <p id="memory-browser-status" role="status"></p>
-    <label id="memory-session-label">Sesja <select id="memory-session-select"></select></label>
+    <label id="memory-session-label">Session <select id="memory-session-select"></select></label>
     <div id="memory-browser-content"></div>
   </dialog>
   <div id="shutdown-notice" class="shutdown-notice hidden" role="status"></div>

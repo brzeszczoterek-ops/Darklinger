@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import asyncio
 from decimal import Decimal
 import json
+import os
 from pathlib import Path
 import re
 from typing import Any
@@ -50,6 +52,16 @@ from .sandbox import (
     SandboxUnavailable,
 )
 from .tools.filesystem import Filesystem
+from .tools.image_metadata import read_image_metadata
+from .tools.image_analysis import analyze_owner_image
+from .perception.runtime import PerceptionRuntime
+from .llm.llm_config import load_llm_config
+from .tool_supervision import ToolSupervisor
+from .autonomy.research_facts import publisher
+
+SUPERVISED_TOOLS = frozenset({
+    "full_tor_search", "full_tor_fetch", "full_tor_inventory", "full_tor_browser_inventory",
+})
 from .tool_recovery import (
     ToolCallOutcome,
     ToolRecoveryRegistry,
@@ -62,6 +74,21 @@ class MCPToolExecutionError(RuntimeError):
     pass
 
 
+class FilesystemScopeDenied(ValueError):
+    """An exact requested target is outside this provider's authority."""
+
+    def __init__(self, requested_path: str, resolved_path: Path, scope: Path):
+        self.details = {
+            "code": "filesystem_scope_denied",
+            "requested_path": requested_path,
+            "resolved_path": str(resolved_path),
+            "authorized_root": str(scope),
+            "execution_attempted": False,
+            "resolution_reason": "requested target is outside the authorized root; no substitute was used",
+        }
+        super().__init__("ScopeDenied: " + json.dumps(self.details, ensure_ascii=False))
+
+
 class MCPTools:
 
     def __init__(
@@ -69,6 +96,8 @@ class MCPTools:
         config: Config,
     ):
         self.workspace = Path(config.workspace).expanduser().resolve()
+        voice_root = Path(getattr(config, "voice_root", self.workspace / "voice"))
+        self.perception = PerceptionRuntime(voice_root.parent / "perception", voice_root)
         configured_project_root = getattr(config, "project_read_root", None)
         self.project_read_root = (
             Path(configured_project_root).expanduser().resolve()
@@ -116,6 +145,7 @@ class MCPTools:
             getattr(config, "autonomy_root", config.workspace / ".darklinger_autonomy")
         )
         self.interactive_trace_root = autonomy_root / "interactive"
+        self.supervisor = ToolSupervisor(self.interactive_trace_root / "tool_jobs")
         learning_root = Path(
             getattr(config, "learning_root", config.workspace / ".darklinger_learning")
         )
@@ -583,10 +613,37 @@ class MCPTools:
 
         return results[:limit]
 
+    def _normalize_search_query(self, query: str) -> str:
+        return self._normalized_search_text(
+            query, owner_text=str(getattr(self, "interaction_prompt", ""))
+        )
+
+    @staticmethod
+    def _normalized_search_text(query: str, *, owner_text: str = "") -> str:
+        """Repair double-escaped Unicode in prose without decoding other escapes."""
+
+        text = str(query)
+
+        def decode(match: re.Match[str]) -> str:
+            escaped = match.group(0)
+            # A request about literal escape syntax must keep that syntax.
+            if escaped.casefold() in owner_text.casefold():
+                return escaped
+            decoded = json.loads('"' + escaped + '"')
+            if all(ord(char) >= 128 and char.isprintable() for char in decoded):
+                return decoded
+            return escaped
+
+        text = re.sub(
+            r"\\u[dD][89aAbB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2}"
+            r"|\\u[0-9a-fA-F]{4}", decode, text
+        )
+        return " ".join(text.split()).strip()
+
     async def web_search(self, query: str, max_results: int = 6) -> str:
         """Run a real search and return a compact, model-friendly result list."""
 
-        query = " ".join(str(query).split()).strip()
+        query = self._normalize_search_query(query)
         if not query:
             return self._json({"error": "web_search requires a non-empty query."})
         limit = max(1, min(int(max_results), 10))
@@ -635,6 +692,18 @@ class MCPTools:
             "https://raw.githubusercontent.com/"
             f"{owner}/{repository}/{revision}/{document_path}"
         )
+
+    def bind_publisher_sources(self, subjects: tuple[str, ...], request: str) -> None:
+        """Register reviewed publisher entry points for a source-bound lookup.
+
+        This method accepts subjects, never model-supplied URLs or a declaration
+        of official status. Observations are still required after navigation.
+        """
+        for subject in subjects:
+            anchor = publisher(subject, request)
+            if anchor:
+                url = anchor.current_url
+                self._web_discovered_urls[self._normalized_web_url(url)] = url
 
     async def web_read(self, url: str) -> str:
         """Open a verified result and return its actual accessibility snapshot."""
@@ -774,6 +843,17 @@ class MCPTools:
             },
         }
 
+    @staticmethod
+    def _model_tool_manifest(data: dict[str, Any]) -> ToolManifest:
+        if any(data.get(key) for key in (
+            "repair_ticket_id", "repair_oracle_source", "repair_oracle_sha256",
+        )):
+            raise ValueError("repair provenance is runtime-owned; use the repair adapter")
+        manifest = ToolManifest.from_dict(data)
+        if any(capability != f"generated.{manifest.name}" for capability in manifest.provides_capabilities):
+            raise ValueError("replacement capabilities require an independently validated repair adapter")
+        return manifest
+
     def _local_tool_definitions(self) -> list[dict[str, Any]]:
         object_schema = {"type": "object", "properties": {}}
         generated_schema = {
@@ -806,7 +886,6 @@ class MCPTools:
                     "type": "array",
                     "items": {"type": "string"},
                 },
-                "repair_ticket_id": {"type": "string"},
             },
             "required": [
                 "name",
@@ -1112,8 +1191,11 @@ class MCPTools:
                 },
             ),
             "learning_create_repair_adapter": (
-                "Create, quarantine, replay-test, and activate an offline replacement "
-                "for a failed generated tool. The replay fixture is owned by DARKLINGER. "
+                "Create, quarantine, and replay-test an offline replacement "
+                "for a failed generated tool. Captured arguments are runtime-owned. "
+                "Activation requires an existing exact-input contract or explicit owner "
+                "arguments/expected fixture; model-suggested expected output alone only "
+                "qualifies a non-executable prototype. "
                 "This cannot replace host, network, filesystem, policy, or edition "
                 "capabilities.",
                 {
@@ -1158,6 +1240,36 @@ class MCPTools:
                 },
             ),
         }
+        schemas["document_read"] = (
+            "Read an exact owner PDF page and character window. Native text first; scanned pages use local visual OCR. "
+            "Returns page/offset coverage and continuation fields. OCR is fallible source data.",
+            {"type": "object", "properties": {"path": {"type": "string"}, "page": {"type": "integer", "minimum": 1},
+             "offset": {"type": "integer", "minimum": 0}}, "required": ["path"], "additionalProperties": False},
+        )
+        for name, description in (("audio_transcribe", "Transcribe speech in an exact owner recording with local Whisper and timestamped segments."),
+                                  ("audio_analyze", "Describe sounds in an exact owner recording using an explicitly configured local audio model.")):
+            schemas[name] = (description + " Reports window coverage; does not change the source or record the microphone.",
+                {"type": "object", "properties": {"path": {"type": "string"}, "start_seconds": {"type": "number", "minimum": 0},
+                 "seconds": {"type": "number", "minimum": 0.1, "maximum": 300}}, "required": ["path"], "additionalProperties": False})
+        schemas["browser_vision"] = (
+            "Inspect the current browser viewport pixels and bind them to the observed page URL and DOM digest. "
+            "Uses a local vision model; no inferred screenshot path or uploaded foreign image.",
+            {"type": "object", "properties": {}, "additionalProperties": False},
+        )
+        schemas["perception_status"] = ("Read local sensory model and Whisper readiness without starting them.",
+            {"type": "object", "properties": {}, "additionalProperties": False})
+        schemas["image_analyze"] = (
+            "Inspect the pixels of an exact owner JPEG, PNG or WebP using a local vision server. "
+            "Checks server capability first. Returns scene observations or OCR, not a verified address.",
+            {"type": "object", "properties": {"path": {"type": "string"}, "mode": {"type": "string", "enum": ["describe", "ocr"]}},
+             "required": ["path"], "additionalProperties": False},
+        )
+        schemas["image_metadata"] = (
+            "Read JPEG dimensions and EXIF/GPS from an exact owner-supplied local image. "
+            "Read-only; no visual recognition, map lookup, or file changes.",
+            {"type": "object", "properties": {"path": {"type": "string"}},
+             "required": ["path"], "additionalProperties": False},
+        )
         descriptions = {
             "learning_record_evidence": "Record bounded evidence for later learning.",
             "learning_propose_lesson": "Propose a lesson grounded in recorded evidence.",
@@ -1167,6 +1279,26 @@ class MCPTools:
             "evm_validate_oracle": "Validate oracle round data against a local policy.",
         }
         schemas.update(self.edition_extension.tool_definitions())
+        for name in SUPERVISED_TOOLS.intersection(schemas):
+            description, schema = schemas[name]
+            schema = dict(schema)
+            schema["properties"] = {key: value for key, value in schema.get("properties", {}).items()
+                                    if not key.endswith("timeout_seconds")}
+            schemas[name] = (description + " Runs as a monitored background job without a wall-clock deadline. "
+                            "A job ID is not completion evidence. Use runtime_tool_status to observe/collect it, "
+                            "or runtime_tool_cancel to stop it.", schema)
+        schemas.update({
+            "runtime_tool_status": (
+                "Inspect running tool jobs independently of model health. Supply job_id to wait briefly for "
+                "an observation and collect a finished result, or omit it to list session jobs. "
+                "The observation interval never cancels a job. Silence means unknown, not a proven hang.",
+                {"type": "object", "properties": {"job_id": {"type": "string"}}, "additionalProperties": False}),
+            "runtime_tool_cancel": (
+                "Explicitly stop one runtime job. Use only when Boss requests stopping or verified diagnostics "
+                "justify abandoning the attempt; never cancel solely because time elapsed.",
+                {"type": "object", "properties": {"job_id": {"type": "string"}},
+                 "required": ["job_id"], "additionalProperties": False}),
+        })
         if self.learning is not None:
             for definition in self.learning.active_tool_definitions():
                 schemas[str(definition["name"])] = (
@@ -1275,6 +1407,11 @@ class MCPTools:
 
     def local_tool_names(self) -> list[str]:
         names = [
+            "image_metadata",
+            "image_analyze",
+            "document_read", "audio_transcribe", "audio_analyze", "browser_vision", "perception_status",
+            "runtime_tool_status",
+            "runtime_tool_cancel",
             "web_search",
             "web_read",
             "evm_analyze_erc20_abi",
@@ -1390,16 +1527,17 @@ class MCPTools:
         tool: str,
         arguments: dict[str, Any] | str,
     ) -> dict[str, Any] | str:
-        """Resolve every filesystem tool path inside DARKLINGER's workspace.
+        """Resolve paths without changing the requested filesystem object.
 
-        Local models often invent host-specific absolute paths even though the
-        filesystem MCP server is intentionally scoped to one runtime workspace.
-        Letting those guesses reach the provider creates an Access denied loop.
-        DARKLINGER owns the storage boundary, so relative paths are rooted there
-        and foreign absolute paths are reduced to their final artifact name.
+        Relative paths use the authorized root. A path outside that authority
+        is denied, never redirected to a same-named workspace artifact.
         """
 
-        if not isinstance(arguments, dict) or not hasattr(self, "workspace"):
+        if not isinstance(arguments, dict):
+            return arguments
+        if tool.strip() == "web_search" and isinstance(arguments.get("query"), str):
+            return {**arguments, "query": self._normalize_search_query(arguments["query"])}
+        if not hasattr(self, "workspace"):
             return arguments
         path_fields = {
             "cat": ("path",),
@@ -1420,6 +1558,9 @@ class MCPTools:
             "tree": ("path",),
             "write": ("path",),
             "write_file": ("path",),
+            "delete_file": ("path",),
+            "remove_file": ("path",),
+            "delete": ("path",),
         }.get(tool.strip(), ())
         if not path_fields:
             return arguments
@@ -1430,51 +1571,23 @@ class MCPTools:
             "list_directory", "ls", "read_file", "search",
             "search_files", "tree",
         }
-        root = self.workspace
+        root = self.workspace.resolve()
         project_root = getattr(self, "project_read_root", None)
         if tool.strip() in read_only_tools and project_root is not None:
             contract = TaskContract.from_prompt(getattr(self, "interaction_prompt", ""))
             if contract.requires_file_read and not contract.requires_file_mutation:
-                root = project_root
+                root = project_root.resolve()
         for field in path_fields:
             value = normalized.get(field)
             if not isinstance(value, str) or not value.strip():
                 normalized[field] = str(root)
                 continue
-            requested = Path(value.strip()).expanduser()
-            if requested.is_absolute():
-                resolved = requested.resolve()
-                try:
-                    resolved.relative_to(root)
-                except ValueError:
-                    # An absolute path outside the configured workspace is a
-                    # model guess, not authority to escape the runtime root.
-                    artifact_name = requested.name or "artifact"
-                    resolved = (root / artifact_name).resolve()
-            else:
-                resolved = (root / requested).resolve()
-                try:
-                    resolved.relative_to(root)
-                except ValueError:
-                    artifact_name = requested.name or "artifact"
-                    resolved = (root / artifact_name).resolve()
-            if root != self.workspace and not resolved.exists() and requested.name:
-                ignored = {".git", ".venv", ".pytest_cache", "node_modules"}
-                matches = [
-                    candidate.resolve()
-                    for candidate in root.rglob(requested.name)
-                    if not ignored.intersection(candidate.relative_to(root).parts)
-                ]
-                if matches:
-                    matches.sort(key=lambda candidate: len(candidate.relative_to(root).parts))
-                    shallowest_depth = len(matches[0].relative_to(root).parts)
-                    shallowest = [
-                        candidate
-                        for candidate in matches
-                        if len(candidate.relative_to(root).parts) == shallowest_depth
-                    ]
-                    if len(shallowest) == 1:
-                        resolved = shallowest[0]
+            requested = Path(value).expanduser()
+            resolved = (requested if requested.is_absolute() else root / requested).resolve()
+            try:
+                resolved.relative_to(root)
+            except ValueError:
+                raise FilesystemScopeDenied(value, resolved, root) from None
             normalized[field] = str(resolved)
         return normalized
 
@@ -1484,7 +1597,14 @@ class MCPTools:
         arguments: dict[str, Any] | str = "",
     ) -> ToolCallOutcome:
         requested_tool = tool.strip()
-        arguments = self.normalize_arguments(requested_tool, arguments)
+        try:
+            arguments = self.normalize_arguments(requested_tool, arguments)
+        except FilesystemScopeDenied as error:
+            return ToolCallOutcome(
+                result=str(error), requested_tool=requested_tool,
+                provider_tool=requested_tool, capabilities=capabilities_for_tool(requested_tool),
+                error=str(error), exception=error, failure_details=error.details,
+            )
         provider_tool = requested_tool
         if (
             requested_tool in {"cat", "read_file"}
@@ -1510,14 +1630,52 @@ class MCPTools:
                 error=error,
             )
         self._register_recovery_providers()
-        return await execute_with_recovery(
-            self.recovery,
-            requested_tool=provider_tool,
-            arguments=arguments,
-            call_provider=self._call_direct,
-            detect_failure=self._recovery_failure,
-            task_id=self.interaction_id,
-        )
+        if requested_tool in SUPERVISED_TOOLS and hasattr(self, "supervisor"):
+            if not isinstance(arguments, dict):
+                raise ValueError("Supervised tool requires structured arguments")
+            available = set(self.edition_extension.tool_names())
+            if requested_tool not in available:
+                raise ValueError("Supervised provider is not available in this edition")
+            job = next((j for j in self.supervisor.jobs.values()
+                        if j.tool == requested_tool and j.arguments == arguments
+                        and j.interaction == self.interaction_id
+                        and j.state in {"queued", "running", "stopping"}), None)
+            if job is None:
+                interaction = self.interaction_id
+                if requested_tool == "full_tor_browser_inventory" and any(
+                    j.tool == requested_tool and j.state in {"queued", "running", "stopping"}
+                    for j in self.supervisor.jobs.values()
+                ):
+                    raise ValueError("A private Tor browser job is already active; inspect or stop it first")
+                async def execute_job():
+                    try:
+                        return await execute_with_recovery(
+                            self.recovery, requested_tool=requested_tool, arguments=arguments,
+                            call_provider=self._call_direct, detect_failure=self._recovery_failure,
+                            task_id=interaction)
+                    finally:
+                        if requested_tool == "full_tor_browser_inventory" and job.cancel.is_set():
+                            await self.edition_extension.host.close_tor_browser()
+                job = self.supervisor.start(requested_tool, arguments, interaction,
+                                            execute_job)
+            return ToolCallOutcome(
+                result=self._json({"job": self.supervisor.status(job.id)}),
+                requested_tool=requested_tool, provider_tool=requested_tool,
+                capabilities=(), error="",
+            )
+        async def execute_direct():
+            return await execute_with_recovery(
+                self.recovery,
+                requested_tool=provider_tool,
+                arguments=arguments,
+                call_provider=self._call_direct,
+                detect_failure=self._recovery_failure,
+                task_id=self.interaction_id,
+            )
+        if hasattr(self, "supervisor") and requested_tool not in {"runtime_tool_status", "runtime_tool_cancel"}:
+            return await self.supervisor.observe_call(requested_tool,
+                arguments if isinstance(arguments, dict) else {}, self.interaction_id, execute_direct)
+        return await execute_direct()
 
     @staticmethod
     def _recovery_failure(result: str, tool: str) -> str:
@@ -1554,6 +1712,38 @@ class MCPTools:
             "tickets": self.recovery.list_tickets(),
         }
 
+    def supervised_receipt(self, tool: str, arguments: dict, result: str) -> dict | None:
+        """Resolve evidence only from local job objects, never a model-written result."""
+        if not hasattr(self, "supervisor"):
+            return None
+        if tool == "runtime_tool_status":
+            job_id = arguments.get("job_id", "")
+        elif tool in SUPERVISED_TOOLS:
+            try:
+                job_id = json.loads(result).get("job", {}).get("job_id", "")
+            except (ValueError, AttributeError):
+                return None
+        else:
+            return None
+        if not job_id:
+            return None
+        job = self.supervisor.get(job_id)
+        status = self.supervisor.status(job_id)
+        if job.state in {"queued", "running", "stopping"}:
+            return {"pending": True, "status": status}
+        if job.collected:
+            return None
+        job.collected = True
+        return {"pending": False, "tool": job.tool, "arguments": job.arguments,
+                "outcome": job.outcome, "error": job.error or ("Job cancelled" if job.state == "cancelled" else ""),
+                "status": status}
+
+    async def close_supervisor(self):
+        if hasattr(self, "supervisor"):
+            await self.supervisor.close()
+        if hasattr(self, "perception"):
+            await self.perception.close()
+
     async def _call_direct(
         self,
         tool: str,
@@ -1563,6 +1753,48 @@ class MCPTools:
         tool = tool.strip()
 
         structured = arguments if isinstance(arguments, dict) else None
+
+        if tool == "perception_status":
+            from .perception.audio import speech_paths
+            cli, model, language, threads = speech_paths(self.perception.voice_root)
+            return self._json({**self.perception.backend.status(), "whisper_ready": cli.is_file() and model.is_file(),
+                "whisper_language": language, "whisper_threads": threads, "formats": ["JPEG", "PNG", "WebP", "PDF", "WAV", "MP3", "M4A", "OGG", "FLAC", "AAC"]})
+        if tool == "document_read":
+            return self._json(await self.perception.document(str((structured or {}).get("path", "")), self.interaction_prompt,
+                page=int((structured or {}).get("page", 1)), offset=int((structured or {}).get("offset", 0))))
+        if tool in {"audio_transcribe", "audio_analyze"}:
+            operation = self.perception.audio if tool == "audio_transcribe" else self.perception.sounds
+            return self._json(await operation(str((structured or {}).get("path", "")), self.interaction_prompt,
+                start_seconds=float((structured or {}).get("start_seconds", 0)), seconds=float((structured or {}).get("seconds", 60))))
+        if tool == "browser_vision":
+            await self.ensure_browser_session()
+            return self._json(await self.perception.browser(self.browser_session))
+        if tool == "image_analyze":
+            path = str((structured or {}).get("path", ""))
+            if Path(path).suffix.lower() not in {".jpg", ".jpeg"} or (structured or {}).get("mode") == "ocr" or self.perception.backend.status()["managed_vision_configured"]:
+                return self._json(await self.perception.image(path, self.interaction_prompt, mode=(structured or {}).get("mode", "describe")))
+            config = load_llm_config()
+            return self._json(await analyze_owner_image(
+                str((structured or {}).get("path", "")),
+                getattr(self, "interaction_prompt", ""),
+                os.getenv("V_CORE_VISION_BASE_URL", config.base_url),
+                os.getenv("V_CORE_VISION_MODEL", config.model),
+            ))
+
+        if tool == "image_metadata":
+            return self._json(await asyncio.to_thread(
+                read_image_metadata, str((structured or {}).get("path", "")),
+                getattr(self, "interaction_prompt", ""),
+            ))
+
+        if tool == "runtime_tool_status":
+            job_id = (structured or {}).get("job_id", "")
+            if not job_id:
+                return self._json(self.supervisor.snapshot())
+            status = await self.supervisor.wait_status(str(job_id))
+            return self._json({"job": status})
+        if tool == "runtime_tool_cancel":
+            return self._json({"job": self.supervisor.cancel(str((structured or {}).get("job_id", "")))})
 
         if self.learning is not None and tool in self.learning.active_tool_names():
             if structured is None:
@@ -1673,7 +1905,7 @@ class MCPTools:
                 if structured is None or not isinstance(structured.get("manifest"), dict):
                     return "learning_stage_tool requires manifest and source."
                 record = self.learning.stage_tool(
-                    ToolManifest.from_dict(structured["manifest"]),
+                    self._model_tool_manifest(structured["manifest"]),
                     value("source"),
                 )
                 return self._json(record.to_dict())
@@ -1688,7 +1920,7 @@ class MCPTools:
                 if isinstance(raw_manifest, dict):
                     # Backwards-compatible expert API. The runtime-facing model
                     # receives the smaller blueprint schema above.
-                    manifest = ToolManifest.from_dict(raw_manifest)
+                    manifest = self._model_tool_manifest(raw_manifest)
                     record = await self.learning.create_tool(
                         manifest,
                         value("source"),
@@ -1883,10 +2115,18 @@ class MCPTools:
                     description=value("description"),
                     source=value("source"),
                     expected=dict(structured["expected"]),
+                    owner_objective=self.interaction_prompt,
                     version=version,
                     scope=ArtifactScope(value("scope", "task")),
                     timeout_seconds=float(structured.get("timeout_seconds", 10.0)),
                 )
+                if record.status.value != "active":
+                    self._tool_definitions_cache = None
+                    return self._json({
+                        "artifact": record.to_dict(), "recovery": ticket.to_dict(),
+                        "needs_validation": True,
+                        "reason": "Independent expected output for the captured arguments is missing.",
+                    })
                 self.recovery.register_provider(
                     record.name,
                     (ticket.capability,),

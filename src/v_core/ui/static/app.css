@@ -425,3 +425,13 @@ dialog .muted { font-size: 12px; line-height: 1.6; }
   .composer-actions { flex-wrap: wrap; }
   .speak-toggle { order: 3; }
 }
+
+#model-tests-dialog { width: min(1000px, calc(100vw - 28px)); }
+#model-tests-run { width: 100%; margin: 8px 0; }
+#model-tests-status { font-size: 13px; line-height: 1.6; }
+#model-tests-content > details { border-top: 1px solid #38503a; padding: 12px 0; }
+#model-tests-content summary { cursor: pointer; color: var(--acid); line-height: 1.6; }
+#model-tests-content section { border-left: 2px solid #38503a; padding: 8px 14px; margin-top: 10px; }
+#model-tests-content h3, #model-tests-content h4 { font: 13px var(--mono); margin: 12px 0 6px; }
+#model-tests-content pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.6 var(--mono); background: #080e0a; padding: 12px; border-radius: 6px; }
+#model-tests-content p { font-size: 12px; line-height: 1.6; }

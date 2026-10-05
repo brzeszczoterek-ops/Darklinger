@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ..tools.media_input import image_paths as literal_image_paths
+
 import ast
 from dataclasses import dataclass
 import hashlib
@@ -12,6 +14,18 @@ from ..generated_tool_contract import GeneratedToolContract
 
 class SourceBlueprintError(ValueError):
     """The runtime could not build a grounded tool contract from source."""
+
+
+class MissingToolInputError(SourceBlueprintError):
+    """Trusted preflight result: concrete inputs must come from the owner."""
+
+    def __init__(self, fields: list[str]) -> None:
+        self.fields = tuple(sorted(fields))
+        super().__init__(
+            "DARKLINGER cannot derive a concrete test fixture for generated-tool "
+            f"input fields: {', '.join(self.fields)}. Supply exact JSON assignments "
+            "in the objective or use literal defaults in source."
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -478,6 +492,10 @@ def build_source_blueprint(
         values = assignments.get(field)
         if values:
             arguments[field] = values[0]
+        elif field == "image_paths" and literal_image_paths(objective):
+            arguments[field] = list(literal_image_paths(objective))
+        elif field == "image_path" and len(literal_image_paths(objective)) == 1:
+            arguments[field] = literal_image_paths(objective)[0]
         elif field == "snapshot_text" and observed_snapshot:
             arguments[field] = observed_snapshot
         elif field in defaults:
@@ -485,12 +503,7 @@ def build_source_blueprint(
         else:
             missing.append(field)
     if missing:
-        rendered = ", ".join(missing)
-        raise SourceBlueprintError(
-            "DARKLINGER cannot derive a concrete test fixture for generated-tool "
-            f"input fields: {rendered}. Supply exact JSON assignments in the "
-            "objective or use literal defaults in source."
-        )
+        raise MissingToolInputError(missing)
 
     expected_values = assignments.get("expected")
     expected = (

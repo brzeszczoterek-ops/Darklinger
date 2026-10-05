@@ -108,7 +108,9 @@ async def _qualify_model(model: str, *, add_to_pool: bool) -> None:
     session = await start_llama_server(binary, profile, root, status=typer.echo)
     try:
         llm = LLM()
-        card = await ModelQualifier(llm).qualify(profile)
+        qualifier = ModelQualifier(llm)
+        qualifier.configure_preview(root, output=typer.echo)
+        card = await qualifier.qualify(profile)
         await llm.client.close()
     finally:
         await session.stop()

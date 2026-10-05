@@ -289,3 +289,95 @@ The cold comparison reduced input tokens by about 78% and task time by about
 32%. This is one bounded explicit-contract workload on one local model, not a
 promise of the same speedup for routing, arbitrary natural-language tasks,
 every model or every tool. Generation still dominates the elapsed time.
+
+## Repair replay provenance
+
+A repair replays the captured arguments and the original regression cases. The
+model's `expected` argument is a suggestion, not an activation oracle. The runtime
+uses an existing saved test for those exact arguments, or one unambiguous explicit
+owner fixture in the immutable objective, for example:
+
+```text
+arguments = {"value": 7} expected = {"result": 14}
+```
+
+A conflicting owner fixture is rejected. Without independent expectations, a
+passing candidate stays `validated`, is excluded from executable providers, and
+leaves the recovery ticket open. Manual activation cannot lift that gate. The
+manifest stores runtime-owned oracle origin and a digest binding arguments to the
+expected output. Legacy repairs lacking that provenance are not executable.
+Model-facing staging/creation APIs reject repair metadata and capability aliases;
+replacement capabilities must pass through the repair adapter.
+
+These checks cover the captured input and saved regressions, not arbitrary unseen
+inputs. Existing saved contracts retain their original trust boundary.
+
+## Missing input before creation
+
+Every call to the source-only builder checks required input fields before calling
+the provider, including native function calls and tool-or-skill alternatives.
+When a concrete input is unavailable, it records
+`generated_tool_input_missing` and an `awaiting_owner` checkpoint, asks for the
+example data and an independently known result, and stops. This draft is not
+executed or activated, and missing data does not consume repeated creation
+attempts or open a provider recovery ticket. Invalid source and failed semantic
+tests retain their existing validation and retry rules.
+
+For image geolocation, image pixel coordinates and bounding boxes do not establish
+latitude/longitude. A mapping-library import is not a geographic lookup. Source
+generation instructions require the actual operation and geographic reference
+evidence; this instruction is not a guarantee that arbitrary model code is correct.
+The current chat/model transport is text-only and has no photo attachment or visual
+model adapter. A filename in a message does not mean the model inspected the image.
+End-to-end visual photo matching and map integration require a visual processor
+and independently checkable location fixtures.
+
+## JPEG metadata input
+
+`image_metadata` reads JPEG dimensions and EXIF/GPS with the standard library.
+It is available in both editions, without NumPy or Pillow. Only an exact absolute
+JPEG path or a local `file:///` URI explicitly present in the current owner's
+message or a contiguous photo follow-up in the current visible conversation
+authorizes a read. Only owner messages contribute inputs; assistant text and
+unrelated or prior application sessions do not. Remote URIs, symlinks, path traversal, basename
+substitutes, directory expansion and files above 16 MiB are rejected. It never
+writes or deletes a photo and never sends it to a network service.
+
+Explicit JPEG inputs are inspected before artifact creation. For photo-location
+requests the runtime reports the recorded GPS, absent GPS, or unreadable EXIF
+separately, then runs `image_analyze` to inspect the pixels. If no working
+visual processor is available, it saves an `awaiting_owner` checkpoint for that
+missing capability. It does not demand the answer to the current location puzzle. The metadata check is not tool-creation success or visual
+recognition. Recorded GPS describes camera position, not independently verified
+object position. Unsupported formats and malformed JPEG structures fail clearly;
+corrupt EXIF is not reported as evidence of absent coordinates.
+
+
+## Local visual observations and photo research
+
+`image_analyze(path)` sends the exact, read-only owner JPEG to a loopback local
+llama.cpp-compatible server after `GET /props` confirms `modalities.vision=true`.
+It uses the current model endpoint by default. A dedicated local processor can be
+selected with `V_CORE_VISION_BASE_URL` and `V_CORE_VISION_MODEL`. The server must
+already run a compatible vision model and projector; this feature does not guess
+projector compatibility, download models, or restart the owner's active server.
+Remote endpoints and redirects are refused. Empty, truncated, or oversized
+observations are errors; absence of advertised vision returns `unavailable` and
+no image payload is sent. A successful observation records the image SHA256 and
+model, but its content remains an uncertain model description, not verified
+coordinates or a confirmed visual match.
+
+Photo follow-ups retain the actual owner paths and explicit region through
+adjacent clarifications. New image inputs replace older targets, and an unrelated
+owner turn ends automatic inheritance. An original location prompt such as
+`znalezienie prawdopodobnej lokacji` is recognized before code generation. Supplied
+JPEG paths also bind the builder's `image_paths` argument without re-requesting
+already known inputs. Independent expected outputs still apply to artifact tests.
+
+Web photo investigations preserve the explicit area in search refinements and
+require a relevant labelled reference in addition to all supplied pixel
+observations. Generic map-provider comparisons, logos and author portraits do not
+complete the photo requirement or close the tool phase. Accessibility text proves
+only the presence of a reference image; it never proves a visual location match.
+PDF text extraction, scan OCR, browser screenshot pixel transport and audio
+perception/transcription are not implemented by these JPEG tools.

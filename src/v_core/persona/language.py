@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from langdetect import DetectorFactory, LangDetectException, detect_langs
 
@@ -11,6 +12,56 @@ DetectorFactory.seed = 0
 
 
 _POLISH_CHARACTERS = frozenset("ąćęłńóśźżĄĆĘŁŃÓŚŹŻ")
+_TECHNICAL_IDENTIFIER = re.compile(
+    r"\b(?=[A-Z0-9_-]*[A-Z])(?=[A-Z0-9_-]*[0-9])"
+    r"[A-Z0-9]+(?:[-_][A-Z0-9]+)*\b"
+)
+
+
+def literal_identifiers(text: str) -> frozenset[str]:
+    return frozenset(_TECHNICAL_IDENTIFIER.findall(text))
+
+
+def normalize_literal_reply(prompt: str, answer: str) -> str:
+    """Remove sentence punctuation only for an explicitly literal-only reply.
+
+    Never extract or guess a value from prose: the entire reply must already
+    consist of one machine identifier and a final period.
+    """
+    if not re.search(
+        r"\b(?:reply|answer|respond|return|output)\s+(?:only|just)\b|"
+        r"\b(?:odpowiedz|zwróć|podaj)\s+(?:tylko|wyłącznie)\b", prompt, re.IGNORECASE,
+    ):
+        return answer
+    candidate = answer.strip()
+    if candidate.endswith(".") and candidate[:-1] in literal_identifiers(candidate):
+        return candidate[:-1]
+    return answer
+
+
+def preserve_literal_identifiers(original: str, rewritten: str) -> str:
+    """Restore only accent corruption of known literal IDs; reject lost IDs.
+
+    A language rewrite cannot change data. No fuzzy spelling, digit correction,
+    or new identifier is inferred: an accented token must normalize exactly to
+    an identifier already present in the original answer.
+    """
+    identifiers = set(_TECHNICAL_IDENTIFIER.findall(original))
+    if not identifiers:
+        return rewritten
+
+    def restore(match: re.Match) -> str:
+        token = match.group()
+        normalized = "".join(
+            ch for ch in unicodedata.normalize("NFKD", token)
+            if not unicodedata.combining(ch)
+        )
+        return normalized if normalized in identifiers else token
+
+    restored = re.sub(r"\b[^\W_]+(?:[-_][^\W_]+)*\b", restore, rewritten)
+    if not identifiers.issubset(set(_TECHNICAL_IDENTIFIER.findall(restored))):
+        return ""
+    return restored
 
 _POLISH_WORDS = frozenset(
     {
@@ -26,6 +77,9 @@ _POLISH_WORDS = frozenset(
         "czy",
         "dla",
         "dobrze",
+        "gotowy",
+        "gotowa",
+        "gotowe",
         "dzisiaj",
         "hej",
         "jak",
@@ -167,6 +221,13 @@ def looks_non_english(text: str) -> bool:
     if len(letters) < 12:
         return False
 
+    # Statistical language guesses are unstable for short acknowledgements.
+    # Require positive English evidence rather than exempting all short prose;
+    # the explicit Polish checks above still take precedence.
+    english_markers = {"the", "this", "that", "your", "our", "is", "are", "has", "have", "with"}
+    if len(words) <= 8 and len(set(words) & english_markers) >= 2:
+        return False
+
     try:
         candidates = detect_langs(prose)
     except LangDetectException:
@@ -232,4 +293,8 @@ def _prose_for_detection(text: str) -> str:
     without_inline_code = re.sub(r"`[^`]*`", " ", without_fences)
     without_urls = re.sub(r"https?://\S+", " ", without_inline_code)
     without_paths = re.sub(r"(?:^|\s)(?:[./~][^\s]+)", " ", without_urls)
-    return " ".join(without_paths.split())
+    # Machine identifiers are literal data, not evidence of prose language.
+    # In short replies an unquoted marker such as BURSZTYN-42 can otherwise
+    # outweigh perfectly valid English ("is our password", "got it").
+    without_identifiers = _TECHNICAL_IDENTIFIER.sub(" ", without_paths)
+    return " ".join(without_identifiers.split())

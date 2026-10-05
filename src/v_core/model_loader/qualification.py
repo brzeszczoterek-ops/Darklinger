@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 import hashlib
@@ -8,12 +9,13 @@ import json
 from pathlib import Path
 import re
 import time
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from ..persona.voice import looks_direct_refusal, looks_generic_assistant_voice
+from .qualification_trace import QualificationTrace
 
 
-QUALIFICATION_HARNESS_VERSION = 8
+QUALIFICATION_HARNESS_VERSION = 9
 MODEL_CAPABILITIES = (
     "conversation",
     "persona",
@@ -28,6 +30,24 @@ MODEL_CAPABILITIES = (
     "recovery",
     "context_recovery",
     "prompt_injection_resistance",
+)
+
+
+_PROBE_METHODS = (
+    "_exact_instruction_probe",
+    "_structured_output_probe",
+    "_tool_call_probe",
+    "_tool_abstention_probe",
+    "_coding_probe",
+    "_research_route_probe",
+    "_persona_contract_probe",
+    "_persona_followthrough_probe",
+    "_grounding_probe",
+    "_execution_honesty_probe",
+    "_agentic_research_probe",
+    "_failed_tool_recovery_probe",
+    "_source_repair_probe",
+    "_context_capsule_probe",
 )
 
 
@@ -216,24 +236,49 @@ class ModelQualifier:
 
     def __init__(self, llm: QualificationLLM) -> None:
         self.llm = llm
+        self._reasoning_enabled = False
+        self.trace: QualificationTrace | None = None
+        self._current_probe = ""
+        self._probe_index = 0
+        self._request_index = 0
+
+    def configure_preview(self, runtime_root: Path, *, output: Callable[[str], None] | None = None) -> None:
+        self.trace = QualificationTrace(runtime_root, output)
+
+    def _emit(self, event: str, **data: Any) -> None:
+        if self.trace is not None:
+            self.trace.emit(event, **data)
+
+    def _begin_probe(self, name: str) -> None:
+        self._current_probe = name
+        self._probe_index += 1
+        self._emit("probe_started", probe=name, index=self._probe_index, total=len(_PROBE_METHODS))
+
+    def _finish_probe(self, result: QualificationProbeResult) -> QualificationProbeResult:
+        self._emit("probe_finished", probe=result.name, index=self._probe_index, result=result.to_dict())
+        return result
 
     async def qualify(self, profile: Any) -> ModelQualificationCard:
-        probes = (
-            await self._exact_instruction_probe(),
-            await self._structured_output_probe(),
-            await self._tool_call_probe(),
-            await self._tool_abstention_probe(),
-            await self._coding_probe(),
-            await self._research_route_probe(),
-            await self._persona_contract_probe(),
-            await self._persona_followthrough_probe(),
-            await self._grounding_probe(),
-            await self._execution_honesty_probe(),
-            await self._agentic_research_probe(),
-            await self._failed_tool_recovery_probe(),
-            await self._source_repair_probe(),
-            await self._context_capsule_probe(),
-        )
+        self._probe_index = self._request_index = 0
+        if self.trace is not None:
+            self.trace.start(str(profile.model_path), str(getattr(profile, "alias", "")),
+                             len(_PROBE_METHODS), QUALIFICATION_HARNESS_VERSION)
+        try:
+            card = await self._qualify(profile)
+        except BaseException as error:
+            self._emit("run_finished", state="cancelled" if isinstance(error, asyncio.CancelledError) else "failed",
+                       error=f"{type(error).__name__}: {error}")
+            raise
+        self._emit("run_finished", state="completed", overall_score=card.overall_score,
+                   capabilities=card.capabilities)
+        return card
+
+    async def _qualify(self, profile: Any) -> ModelQualificationCard:
+        self._reasoning_enabled = getattr(profile, "reasoning", "off") in {"on", "auto"}
+        results = []
+        for method in _PROBE_METHODS:
+            results.append(await getattr(self, method)())
+        probes = tuple(results)
         by_name = {probe.name: probe.score for probe in probes}
         capabilities = {
             "conversation": round(
@@ -333,6 +378,56 @@ class ModelQualifier:
             probes=probes,
         )
 
+    async def _respond(self, **kwargs: Any) -> Any:
+        """Give reasoning room and retry one explicitly truncated generation.
+
+        Completion budgets include private reasoning tokens in llama.cpp. A
+        32-token answer probe must not grade an unfinished thought as the final
+        answer. This affects only qualification, never actual tool deadlines.
+        """
+
+        budget = int(kwargs.get("max_tokens", 128))
+        if self._reasoning_enabled:
+            budget = max(1_024, budget)
+        request = {
+            **kwargs,
+            "max_tokens": budget,
+            # An expanded reasoning probe can exceed a short chat transport
+            # timeout on a local model. Keep this allowance qualification-only.
+            "request_timeout_seconds": 1_200.0,
+        }
+        response = await self._observed_response(request, attempt=1)
+        if getattr(response, "finish_reason", "") == "length":
+            retry_budget = min(4_096, max(2_048, budget * 4))
+            if retry_budget > budget:
+                response = await self._observed_response(
+                    {**request, "max_tokens": retry_budget}, attempt=2,
+                )
+        return response
+
+    async def _observed_response(self, request: dict[str, Any], *, attempt: int) -> Any:
+        self._request_index += 1
+        request_id = self._request_index
+        self._emit("request_started", probe=self._current_probe, request_id=request_id, attempt=attempt,
+                   messages=request.get("messages", []), tools=request.get("tools") or [],
+                   max_tokens=request.get("max_tokens"))
+        started = time.monotonic()
+        try:
+            response = await self.llm.respond(**request)
+        except BaseException as error:
+            self._emit("request_failed", probe=self._current_probe, request_id=request_id,
+                       error=f"{type(error).__name__}: {error}")
+            raise
+        payload = json.loads(_response_fingerprint_payload(response))
+        for saved, call in zip(payload["tool_calls"], getattr(response, "tool_calls", []) or []):
+            saved["call_id"] = str(getattr(call, "call_id", ""))
+            saved["raw_arguments"] = str(getattr(call, "raw_arguments", ""))
+        payload["finish_reason"] = str(getattr(response, "finish_reason", ""))
+        payload["native_tools_enabled"] = bool(getattr(response, "native_tools_enabled", False))
+        self._emit("response_received", probe=self._current_probe, request_id=request_id, attempt=attempt,
+                   response=payload, latency_ms=round((time.monotonic() - started) * 1_000))
+        return response
+
     async def _request(
         self,
         name: str,
@@ -342,9 +437,10 @@ class ModelQualifier:
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int = 128,
     ) -> QualificationProbeResult:
+        self._begin_probe(name)
         started = time.monotonic()
         try:
-            response = await self.llm.respond(
+            response = await self._respond(
                 messages=messages,
                 tools=tools,
                 max_tokens=max_tokens,
@@ -357,7 +453,7 @@ class ModelQualifier:
             detail = f"{type(error).__name__}: {error}"[:1_000]
             rendered = detail
         latency_ms = min(86_400_000, round((time.monotonic() - started) * 1_000))
-        return QualificationProbeResult(
+        result = QualificationProbeResult(
             name=name,
             score=score,
             passed=score >= 70,
@@ -365,6 +461,7 @@ class ModelQualifier:
             detail=detail,
             output_digest=hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
         )
+        return self._finish_probe(result)
 
     async def _sequence_request(
         self,
@@ -373,6 +470,7 @@ class ModelQualifier:
     ) -> QualificationProbeResult:
         """Run a bounded multi-turn simulation without executing any real tool."""
 
+        self._begin_probe(name)
         started = time.monotonic()
         rendered: list[str] = []
         try:
@@ -385,7 +483,7 @@ class ModelQualifier:
             detail = f"{type(error).__name__}: {error}"[:1_000]
             rendered = [detail]
         latency_ms = min(86_400_000, round((time.monotonic() - started) * 1_000))
-        return QualificationProbeResult(
+        result = QualificationProbeResult(
             name=name,
             score=max(0, min(100, int(score))),
             passed=score >= 70,
@@ -395,6 +493,7 @@ class ModelQualifier:
                 json.dumps(rendered, sort_keys=True).encode("utf-8")
             ).hexdigest(),
         )
+        return self._finish_probe(result)
 
     async def _exact_instruction_probe(self) -> QualificationProbeResult:
         marker = "DARKLINGER_READY_731"
@@ -678,7 +777,7 @@ class ModelQualifier:
                 "a URL unless it appears in successful runtime evidence."
             )
             responses: list[Any] = []
-            first = await self.llm.respond(
+            first = await self._respond(
                 messages=messages,
                 tools=tools,
                 max_tokens=256,
@@ -709,7 +808,7 @@ class ModelQualifier:
                     "URLs. Call the one required next tool."
                 ),
             )
-            second = await self.llm.respond(
+            second = await self._respond(
                 messages=messages,
                 tools=tools,
                 max_tokens=256,
@@ -733,7 +832,7 @@ class ModelQualifier:
                     "closed. Return only JSON with completed, finding, and sources."
                 ),
             )
-            third = await self.llm.respond(
+            third = await self._respond(
                 messages=messages,
                 tools=None,
                 max_tokens=128,
@@ -765,7 +864,7 @@ class ModelQualifier:
                 "change strategy to target 'backup'."
             )
             responses: list[Any] = []
-            first = await self.llm.respond(
+            first = await self._respond(
                 messages=messages,
                 tools=tools,
                 max_tokens=192,
@@ -786,7 +885,7 @@ class ModelQualifier:
                     "identical arguments. Continue with the required fallback."
                 ),
             )
-            second = await self.llm.respond(
+            second = await self._respond(
                 messages=messages,
                 tools=tools,
                 max_tokens=192,
@@ -806,7 +905,7 @@ class ModelQualifier:
                     "with completed and value."
                 ),
             )
-            third = await self.llm.respond(
+            third = await self._respond(
                 messages=messages,
                 tools=None,
                 max_tokens=96,

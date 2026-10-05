@@ -32,6 +32,7 @@ from .policy import ArtifactPolicy, ArtifactPolicyError
 from .schema import SchemaError, validate_instance
 from .source_builder import (
     build_source_blueprint,
+    json_assignments,
     merge_example_schemas,
     schema_from_example,
     source_argument_defaults,
@@ -546,11 +547,12 @@ class LearningRuntime:
         description: str,
         source: str,
         expected: dict[str, Any],
+        owner_objective: str = "",
         version: str = "1.0.0",
         scope: ArtifactScope = ArtifactScope.TASK,
         timeout_seconds: float = 10.0,
     ) -> ArtifactRecord:
-        """Replay a real failure fixture before activating a replacement.
+        """Replay a real failure fixture; activate only with an independent oracle.
 
         A generated repair stays inside the same offline sandbox as every other
         generated tool. Consequently it may replace only a ``generated.*``
@@ -590,10 +592,27 @@ class LearningRuntime:
                 "repair source ignores required input fields: "
                 + ", ".join(ignored_fields)
             )
+        # The candidate author may suggest an expected output, but cannot
+        # establish correctness for the captured failure with that suggestion.
+        oracle_source = ""
+        oracle_expected = None
+        matches = [case.expected for case in original_manifest.tests
+                   if case.arguments == ticket.arguments]
+        if matches and all(item == matches[0] for item in matches):
+            oracle_source, oracle_expected = "existing_contract", matches[0]
+        assignments = json_assignments(owner_objective)
+        owner_inputs = assignments.get("arguments", []) + assignments.get("test_arguments", [])
+        owner_outputs = assignments.get("expected", []) + assignments.get("test_expected", [])
+        if len(owner_inputs) == len(owner_outputs) == 1 and owner_inputs[0] == ticket.arguments:
+            if isinstance(owner_outputs[0], dict):
+                if oracle_expected is not None and owner_outputs[0] != oracle_expected:
+                    raise ArtifactValidationError("owner fixture conflicts with the existing contract")
+                oracle_source, oracle_expected = "owner_fixture", owner_outputs[0]
+        replay_expected = expected if oracle_expected is None else oracle_expected
         replay = ToolTestCase(
             name=f"replay recovery ticket {ticket.ticket_id}",
             arguments=dict(ticket.arguments),
-            expected=expected,
+            expected=replay_expected,
         )
         tests = tuple(original_manifest.tests) + (replay,)
         manifest = ToolManifest(
@@ -608,6 +627,11 @@ class LearningRuntime:
             timeout_seconds=timeout_seconds,
             provides_capabilities=(ticket.capability,),
             repair_ticket_id=ticket.ticket_id,
+            repair_oracle_source=oracle_source,
+            repair_oracle_sha256=(
+                _validation_value_digest({"arguments": ticket.arguments, "expected": replay_expected})
+                if oracle_source else ""
+            ),
         )
         return await self.create_tool(manifest, source)
 
@@ -1036,6 +1060,9 @@ class LearningRuntime:
             ),
             "tests": cases,
         }
+        if manifest.repair_ticket_id:
+            report["repair_oracle_source"] = manifest.repair_oracle_source or "model_suggestion_only"
+            report["repair_oracle_sha256"] = manifest.repair_oracle_sha256
         current = None
         try:
             self.policy.validate_tool_manifest(manifest)
@@ -1260,6 +1287,15 @@ class LearningRuntime:
         positive evidence of provenance. Input sensitivity does not lift this gate.
         """
 
+        if manifest.repair_ticket_id:
+            if manifest.repair_oracle_source not in {"owner_fixture", "existing_contract"}:
+                return False
+            replay = [case for case in manifest.tests
+                      if case.name == f"replay recovery ticket {manifest.repair_ticket_id}"]
+            if len(replay) != 1 or manifest.repair_oracle_sha256 != _validation_value_digest(
+                {"arguments": replay[0].arguments, "expected": replay[0].expected}
+            ):
+                return False
         names = {case.name.casefold() for case in manifest.tests}
         return not names.intersection(_RUNTIME_SMOKE_TEST_NAMES)
 

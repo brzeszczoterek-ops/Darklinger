@@ -241,6 +241,9 @@ class ToolManifest:
     timeout_seconds: float = 10.0
     provides_capabilities: tuple[str, ...] = ()
     repair_ticket_id: str = ""
+    # Runtime-owned provenance; never accepted from a model manifest.
+    repair_oracle_source: str = ""
+    repair_oracle_sha256: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", validate_name(self.name))

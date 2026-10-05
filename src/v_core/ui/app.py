@@ -23,6 +23,7 @@ from v_core.memory.memoir import SessionMemoir, current_memoir_turn
 from v_core.response_preview import response_preview
 from v_core.ui.runtime_activity import runtime_activity, model_log
 from v_core.ui.memory_browser import browse
+from v_core.model_loader.qualification_trace import qualification_preview
 
 
 _STATIC_ROOT = Path(__file__).with_name("static")
@@ -116,6 +117,8 @@ class UIRuntime:
             ),
         }
         extension = self.edition_extension
+        supervisor = getattr(tools, "supervisor", None)
+        payload["tool_supervision"] = supervisor.snapshot() if supervisor is not None else None
         if extension is not None:
             manifest = extension.ui_manifest()
             details = extension.ui_status(
@@ -193,6 +196,82 @@ def create_app(runtime: UIRuntime) -> Starlette:
             return denied
         return JSONResponse(runtime.status(), headers={"Cache-Control": "no-store"})
 
+    async def perception_status(request: Request) -> Response:
+        denied = runtime.require_token(request)
+        if denied is not None:
+            return denied
+        tools = getattr(getattr(runtime.core, "agent", None), "tools", None)
+        perception = getattr(tools, "perception", None)
+        if perception is None:
+            return JSONResponse({"error": "Perception tools unavailable"}, status_code=503)
+        from v_core.perception.audio import speech_paths
+        import os
+        try:
+            cli, model, _, _ = speech_paths(perception.voice_root)
+            payload = {"vision": perception.backend.status(),
+                       "speech_configured": cli.is_file() and model.is_file(),
+                       "sound_model_configured": bool(os.getenv("V_CORE_AUDIO_BASE_URL") and os.getenv("V_CORE_AUDIO_MODEL")),
+                       "pdf_text_available": True}
+            return JSONResponse(payload, headers={"Cache-Control": "no-store"})
+        except (OSError, ValueError) as error:
+            return JSONResponse({"error": str(error)}, status_code=400)
+
+    async def upload_media(request: Request) -> Response:
+        denied = runtime.require_token(request)
+        if denied is not None:
+            return denied
+        if runtime.closing:
+            return JSONResponse({"error": "V is shutting down"}, status_code=503)
+        from v_core.tools.media_input import MEDIA_SUFFIXES
+        import os
+        filename = request.query_params.get("name", "")
+        if (not filename or Path(filename).name != filename or "\\" in filename
+                or any(ord(c) < 32 for c in filename) or len(filename) > 255
+                or Path(filename).suffix.casefold() not in MEDIA_SUFFIXES):
+            return JSONResponse({"error": "Choose an image, PDF or audio file"}, status_code=400)
+        limit = 64 * 1024 * 1024
+        length = request.headers.get("content-length")
+        if length and (not length.isdecimal() or int(length) > limit):
+            return JSONResponse({"error": "Attachment exceeds 64 MiB"}, status_code=413)
+        root = Path(runtime.config.voice_root).parent / "perception" / "uploads"
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        root = root.absolute()
+        if root.resolve() != root:
+            return JSONResponse({"error": "Attachment directory is redirected"}, status_code=400)
+        target = root / (secrets.token_hex(16) + Path(filename).suffix.casefold())
+        size = 0
+        saved = False
+        created = False
+        try:
+            descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            created = True
+            with os.fdopen(descriptor, "wb") as handle:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > limit:
+                        return JSONResponse({"error": "Attachment exceeds 64 MiB"}, status_code=413)
+                    handle.write(chunk)
+            if not size:
+                return JSONResponse({"error": "Attachment is empty"}, status_code=400)
+            saved = True
+            return JSONResponse({"name": filename, "uri": target.as_uri(), "size": size},
+                                headers={"Cache-Control": "no-store"})
+        finally:
+            if created and not saved:
+                target.unlink(missing_ok=True)
+
+    async def stop_tool_job(request: Request) -> Response:
+        denied = runtime.require_token(request)
+        if denied is not None:
+            return denied
+        supervisor = getattr(getattr(getattr(runtime.core, "agent", None), "tools", None), "supervisor", None)
+        if supervisor is None:
+            return JSONResponse({"error": "Tool supervisor unavailable"}, status_code=503)
+        try:
+            return JSONResponse({"job": supervisor.cancel(request.path_params["job_id"])})
+        except ValueError as error:
+            return JSONResponse({"error": str(error)}, status_code=404)
+
     async def memory_browser(request: Request) -> Response:
         denied = runtime.require_token(request)
         if denied is not None:
@@ -202,9 +281,9 @@ def create_app(runtime: UIRuntime) -> Starlette:
                              session_id=request.query_params.get("session", "current"))
             code = 200
         except PermissionError:
-            payload, code = {"error": "Brak dostępu do archiwum w tej edycji."}, 403
+            payload, code = {"error": "Archive access is unavailable in this edition."}, 403
         except (OSError, ValueError, UnicodeError):
-            payload, code = {"error": "Nie można odczytać danych: plik niedostępny, nieprawidłowy lub zbyt duży."}, 400
+            payload, code = {"error": "Cannot read data: the file is unavailable, invalid or too large."}, 400
         return JSONResponse(payload, status_code=code, headers={"Cache-Control": "no-store"})
 
     async def chat(request: Request) -> Response:
@@ -269,7 +348,8 @@ def create_app(runtime: UIRuntime) -> Starlette:
                     await queue.put({"type": "done", "answer": answer})
                 except asyncio.CancelledError:
                     await queue.put(
-                        {"type": "error", "error": "V is shutting down"}
+                        {"type": "error", "error": ("V is shutting down" if runtime.closing
+                                                    else "Tool operation was cancelled; this chat turn stopped")}
                     )
                     raise
                 except Exception as exc:
@@ -366,6 +446,23 @@ def create_app(runtime: UIRuntime) -> Starlette:
         asyncio.get_running_loop().call_later(0.15, runtime.shutdown_callback)
         return JSONResponse({"status": "shutting_down"})
 
+    async def model_tests(request: Request) -> Response:
+        denied = runtime.require_token(request)
+        if denied is not None:
+            return denied
+        try:
+            result = qualification_preview(
+                getattr(runtime.config, "model_runtime_root", None),
+                request.query_params.get("run_id", ""),
+            )
+        except ValueError as error:
+            return JSONResponse({"error": str(error)}, status_code=400)
+        except FileNotFoundError as error:
+            return JSONResponse({"error": str(error)}, status_code=404)
+        except OSError as error:
+            return JSONResponse({"error": str(error)}, status_code=503)
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
     async def log(request: Request) -> Response:
         denied = runtime.require_token(request)
         if denied is not None:
@@ -380,7 +477,7 @@ def create_app(runtime: UIRuntime) -> Starlette:
         try:
             if request.method == "POST":
                 if runtime.speech_busy() or manager.busy:
-                    return JSONResponse({"error": "Zakończ zadanie, nagrywanie lub instalację przed zmianą ustawień."}, status_code=409)
+                    return JSONResponse({"error": "Finish the task, recording or installation before changing settings."}, status_code=409)
                 payload = await request.json()
                 if not isinstance(payload, dict):
                     raise ValueError("Settings must be an object")
@@ -464,8 +561,12 @@ def create_app(runtime: UIRuntime) -> Starlette:
         routes=[
             Route("/", index, methods=["GET"]),
             Route("/api/status", status, methods=["GET"]),
+            Route("/api/perception/status", perception_status, methods=["GET"]),
+            Route("/api/perception/upload", upload_media, methods=["POST"]),
+            Route("/api/tool-jobs/{job_id}/cancel", stop_tool_job, methods=["POST"]),
             Route("/api/memory/browser", memory_browser, methods=["GET"]),
             Route("/api/model/log", log, methods=["GET"]),
+            Route("/api/model/tests", model_tests, methods=["GET"]),
             Route("/api/voice/settings", voice_settings, methods=["GET", "POST"]),
             Route("/api/voice/install", voice_install, methods=["POST"]),
             Route("/api/voice/install/cancel", voice_install_cancel, methods=["POST"]),

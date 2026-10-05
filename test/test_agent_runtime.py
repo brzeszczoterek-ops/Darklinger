@@ -5,6 +5,7 @@ import json
 import os
 import stat
 import tomllib
+from datetime import date
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -357,6 +358,78 @@ def test_tool_request_rejects_multiple_tool_objects_as_ambiguous() -> None:
         '{"tool":"read_file","arguments":{"path":"one"}}\n'
         '{"tool":"read_file","arguments":{"path":"two"}}'
     ) is None
+
+
+@pytest.mark.parametrize("query,owner,expected", [
+    (r"dzia\u0142aj\u0105ce europejskie strony", "działające europejskie strony", "działające europejskie strony"),
+    (r"za\u017c\u00f3\u0142\u0107", "zażółć", "zażółć"),
+    (r"example \ud83d\udd0e", "example", "example 🔎"),
+    (r"literal \u0142 syntax", r"Explain \u0142 syntax", r"literal \u0142 syntax"),
+    (r"C:\new\tools \u000a \u005c", "search", r"C:\new\tools \u000a \u005c"),
+    (r"letter \u0142\u000a", "search", r"letter ł\u000a"),
+    (r"bad \uZZZZ \ud800", "search", r"bad \uZZZZ \ud800"),
+    ("  ordinary Unicode: łódź  ", "search", "ordinary Unicode: łódź"),
+])
+def test_search_normalization_repairs_unicode_only(query, owner, expected) -> None:
+    tools = MCPTools.__new__(MCPTools)
+    tools.interaction_prompt = owner
+    arguments = {"query": query, "max_results": 6}
+    normalized = tools.normalize_arguments("web_search", arguments)
+    assert normalized == {"query": expected, "max_results": 6}
+    assert arguments["query"] == query
+    assert tools._normalize_search_query(expected) == expected
+    assert tools.normalize_arguments("write_file", {"content": query}) == {"content": query}
+
+
+@pytest.mark.asyncio
+async def test_search_sends_readable_unicode_to_provider() -> None:
+    from urllib.parse import parse_qs, urlsplit
+
+    tools = MCPTools.__new__(MCPTools)
+    tools._web_discovered_urls = {}
+    navigations = []
+
+    async def browser_call(tool, arguments):
+        if tool == "browser_navigate":
+            navigations.append(arguments["url"])
+        return "No results"
+
+    tools.browser_call = browser_call
+    result = json.loads(await tools.web_search(r"dzia\u0142aj\u0105ce strony"))
+    assert result["query"] == "działające strony"
+    assert parse_qs(urlsplit(navigations[0]).query)["q"] == ["działające strony"]
+
+
+def test_escaped_unicode_refinement_is_decoded_before_subject_checks() -> None:
+    prompt = "Chciałbym sprawdzić działające europejskie strony internetowe i zrobić raport."
+    contract = TaskContract(
+        requires_browser_navigation=True, requires_web_discovery=True,
+        requires_evidence_report=True,
+    )
+    arguments = {"query": r"dzia\u0142aj\u0105ce europejskie strony"}
+    assert Agent._repair_web_discovery_navigation(
+        prompt, "web_search", arguments, contract, [], [],
+        preferred_query=prompt,
+    ) == {"query": "działające europejskie strony"}
+
+
+def test_system_prompt_includes_runtime_date(monkeypatch) -> None:
+    import v_core.agent as agent_module
+
+    class Clock:
+        @staticmethod
+        def now(tz):
+            return SimpleNamespace(date=lambda: date(2026, 10, 5))
+
+    monkeypatch.setattr(agent_module, "datetime", Clock)
+    agent = Agent.__new__(Agent)
+    agent.llm = SimpleNamespace(config=SimpleNamespace(system_prompt="You are V."))
+    agent.memory = SimpleNamespace(relationship_state=None)
+    agent.persona = SimpleNamespace(build_runtime=lambda state: "persona")
+    agent._build_persona_context = lambda *args, **kwargs: SimpleNamespace(render=lambda: "context")
+    prompt = agent._build_system_prompt("Find current information", agent_mode=False)
+    assert "Current date (UTC): 2026-10-05" in prompt
+    assert "Historical sources establish historical claims" in prompt
 
 
 def test_web_search_extracts_grounded_duckduckgo_results() -> None:
@@ -1085,7 +1158,7 @@ async def test_light_conversation_streams_and_skips_expensive_memory() -> None:
 
     class LLMStub:
         async def stream(self, **kwargs):
-            assert kwargs["max_tokens"] == 96
+            assert kwargs["max_tokens"] == 1024
             messages = kwargs["messages"]
             assert "never insert a swear" in (
                 messages[0]["content"]
@@ -1311,7 +1384,7 @@ async def test_light_chat_rejects_exact_past_tense_execution_hallucination(
         trace=agent._start_agent_trace("Cześć V, jak tam wieczór?"),
     )
 
-    assert "No tests were started" in answer
+    assert "No tools ran" in answer
     assert "just tested" not in answer
     journal = next((tmp_path / "traces" / "journal").glob("*.jsonl"))
     assert "conversation_execution_claim_rejected" in journal.read_text(
@@ -1387,7 +1460,7 @@ async def test_creative_conversation_retries_once_after_model_refusal() -> None:
 
         def _next(self, max_tokens: int) -> str:
             self.calls += 1
-            assert max_tokens == 768
+            assert max_tokens == 2048
             if self.calls == 1:
                 return (
                     "I cut this off because the response was inappropriate. "
@@ -1526,8 +1599,11 @@ async def test_long_non_action_dialogue_uses_chat_not_agent_tools(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("recall,has_archive", [(False, False), (False, True), (True, False), (True, True)])
 async def test_semantic_compact_chat_skips_expensive_memory_without_durable_fact(
     tmp_path: Path,
+    recall: bool,
+    has_archive: bool,
 ) -> None:
     prompt = "Cześć V, jak ci mija wieczór i co sądzisz o dzisiejszym tempie pracy?"
 
@@ -1539,6 +1615,8 @@ async def test_semantic_compact_chat_skips_expensive_memory_without_durable_fact
                 message_clear=True,
                 action_requested=False,
                 retain_memory=False,
+                recall_memory=recall,
+                memory_query="evening" if recall else "",
             )
 
     class ToolsStub:
@@ -1550,6 +1628,9 @@ async def test_semantic_compact_chat_skips_expensive_memory_without_durable_fact
 
     class LLMStub:
         async def ask(self, **kwargs) -> str:
+            text = "\n".join(m["content"] for m in kwargs["messages"])
+            assert ("fallible recalled data" in text) is (recall and has_archive)
+            assert ("EVENING-ARCHIVE-42" in text) is (recall and has_archive)
             return "Evening's moving fast, Boss. The pace is useful, but brutally expensive."
 
     class MemoryStub:
@@ -1565,6 +1646,10 @@ async def test_semantic_compact_chat_skips_expensive_memory_without_durable_fact
     agent.tools = ToolsStub()
     agent.llm = LLMStub()
     agent.memory = MemoryStub()
+    agent.memory.manager = SimpleNamespace(load_all=lambda _: [])
+    agent.config = SimpleNamespace(memory_root=tmp_path)
+    if has_archive:
+        agent.memory.relationship_state.shared_history.append("Evening topic: EVENING-ARCHIVE-42")
     agent.persona = PersonaRuntime(identity=IdentityKernel(), voice=VoiceProfile())
     agent._agent_trace_root = tmp_path
     agent._last_execution_context = None
@@ -1591,7 +1676,7 @@ async def test_streaming_guard_does_not_emit_polish_before_rewrite() -> None:
             yield "Cześć, Boss. U mnie wszystko dobrze i jestem gotowa do pracy."
 
         async def ask(self, **kwargs) -> str:
-            assert kwargs["max_tokens"] == 256
+            assert kwargs["max_tokens"] == 1024
             return "Hey, Boss. I'm good and ready to work."
 
     agent = object.__new__(Agent)
@@ -3270,6 +3355,73 @@ def test_grounded_semantic_query_beats_runtime_greeting_clause() -> None:
     assert Agent._query_remainder_overlap(semantic, prompt) >= 3
 
 
+def test_discovery_query_keeps_projects_instead_of_report_formatting() -> None:
+    prompt = (
+        "Cześć V. To kontrolowany test raportu. Znajdź w internecie aktualne "
+        "stabilne wydania Python i Firefox na dzisiaj. Sprawdź dwie oficjalne strony. "
+        "Dla każdego podaj numer wersji i dokładny URL źródła."
+    )
+    query = Agent._discovery_search_query(prompt)
+    assert "Python" in query and "Firefox" in query
+    assert "URL" not in query
+    assert "kontrolowany" not in query
+
+
+def test_long_comparison_query_does_not_amputate_second_project() -> None:
+    query = Agent._discovery_search_query(
+        "V, proszę wyszukaj w internecie aktualne informacje na temat najnowszych "
+        "stabilnych wydań programu Python oraz przeglądarki Firefox i przygotuj porównanie."
+    )
+    assert "Python" in query and "Firefox" in query
+
+
+@pytest.mark.parametrize("subject", ["Python", "Firefox"])
+def test_comparison_accepts_separate_named_subject_search(subject) -> None:
+    focused = "current stable releases of Python and Firefox"
+    query = f"current stable {subject} version official website"
+    contract = TaskContract(requires_web_discovery=True)
+    observed = [{"tool": "web_search", "result_excerpt": json.dumps({"results": [
+        {"title": "Download Python", "url": "https://python.example/downloads"},
+        {"title": "Python release notes", "url": "https://python.example/latest"},
+        {"title": "Firefox release notes", "url": "https://firefox.example/latest"},
+    ]})}]
+    for calls in ([], observed):
+        assert Agent._repair_web_discovery_navigation(
+            "Znajdź aktualne stabilne wydania Python i Firefox", "web_search",
+            {"query": query}, contract, calls, [], preferred_query=focused,
+        ) == {"query": query}
+    assert Agent._repair_web_discovery_navigation(
+        "Znajdź aktualne stabilne wydania Python i Firefox", "web_search",
+        {"query": "current stable Chrome version"}, contract, [], [], preferred_query=focused,
+    ) == {"query": focused}
+
+
+def test_semantic_query_must_preserve_all_named_comparison_subjects() -> None:
+    focused = "current stable versions of Python and Firefox"
+    assert Agent._query_preserves_named_subjects("Python Firefox releases", focused)
+    assert not Agent._query_preserves_named_subjects("Firefox releases", focused)
+    assert not Agent._query_preserves_named_subjects("Chrome releases", focused)
+    assert Agent._query_preserves_named_subjects(
+        "current stable releases of Python and Firefox",
+        "Znajdź w internecie aktualne stabilne wydania Python i Firefox na dzisiaj",
+    )
+
+
+def test_multilingual_comparison_sources_can_cover_named_items_separately() -> None:
+    calls = [
+        {"tool": "web_read", "arguments": {"url": "https://python.example/releases"},
+         "result_excerpt": "Python release notes."},
+        {"tool": "web_read", "arguments": {"url": "https://firefox.example/releases"},
+         "result_excerpt": "Firefox release notes."},
+    ]
+    query = "aktualne stabilne wydania Python i Firefox"
+    assert Agent._topic_relevance_missing(query, calls, minimum_sources=2, strict_each_source=True) == []
+    calls[0]["result_excerpt"] = "Firefox release notes."
+    assert Agent._topic_relevance_missing(query, calls, minimum_sources=2, strict_each_source=True) == [
+        "browser_evidence:topic_subjects=python"
+    ]
+
+
 def test_topic_relevance_rejects_unrelated_detail_product() -> None:
     calls = [
         {
@@ -4375,6 +4527,37 @@ async def test_llm_rejects_incomplete_unlisted_or_narrated_textual_call(
 
     assert response.content == content
     assert response.tool_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested, expected", [(1_200.0, 1_200.0), (1.0, 120.0)])
+async def test_llm_can_extend_one_request_timeout_without_changing_chat_default(
+    monkeypatch: pytest.MonkeyPatch, requested: float, expected: float,
+) -> None:
+    requests = []
+
+    class CompletionsStub:
+        async def create(self, **kwargs):
+            requests.append(kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(content="done", tool_calls=[]),
+                finish_reason="stop",
+            )])
+
+    monkeypatch.setenv("V_CORE_TIMEOUT", "120")
+    llm = object.__new__(LLM)
+    llm.config = SimpleNamespace(model="local", temperature=0.2, top_p=0.9)
+    llm.client = SimpleNamespace(chat=SimpleNamespace(completions=CompletionsStub()))
+    llm._native_tools_supported = None
+
+    await llm.respond(
+        messages=[{"role": "user", "content": "probe"}],
+        request_timeout_seconds=requested,
+    )
+    await llm.respond(messages=[{"role": "user", "content": "ordinary chat"}])
+
+    assert requests[0]["timeout"] == expected
+    assert "timeout" not in requests[1]
 
 
 @pytest.mark.asyncio
@@ -5843,7 +6026,7 @@ def test_malformed_relative_navigation_uses_next_grounded_result() -> None:
     assert repaired == {"url": second}
 
 
-def test_read_path_typo_is_repaired_from_successful_write() -> None:
+def test_read_path_typo_is_not_redirected_to_successful_write() -> None:
     correct = "/workspace/smoke-report.md"
     calls = [
         {
@@ -5859,7 +6042,7 @@ def test_read_path_typo_is_repaired_from_successful_write() -> None:
         calls,
     )
 
-    assert repaired == {"path": correct, "head": 1}
+    assert repaired == {"path": "/workspace/smone-report.md", "head": 1}
 
 
 def test_unrelated_read_path_is_not_redirected() -> None:
@@ -6598,8 +6781,8 @@ def test_learning_creation_receives_larger_generation_budget() -> None:
     assert Agent._agent_generation_budget(
         definitions,
         context_tokens=12_000,
-    ) == 3_000
-    assert Agent._agent_generation_budget([], context_tokens=12_000) == 512
+    ) == 4_000
+    assert Agent._agent_generation_budget([], context_tokens=12_000) == 1024
 
 
 @pytest.mark.asyncio
@@ -8445,7 +8628,7 @@ async def test_short_non_action_statement_uses_current_message_only_chat(
         async def ask(self, *, messages: list[dict], **kwargs) -> str:
             self.calls += 1
             self.messages = messages
-            assert kwargs["max_tokens"] == 96
+            assert kwargs["max_tokens"] == 1024
             return (
                 "Boss... you okay, or did your brain just throw a syntax "
                 "error? Try that again."
@@ -9009,7 +9192,7 @@ async def test_agent_repairs_empty_learning_call_before_tool_execution() -> None
 
     assert "active" in answer
     assert tools.calls == [("learning_create_tool", valid_arguments)]
-    assert llm.budgets == [3_000, 3_000, 256]
+    assert llm.budgets == [4_000, 4_000, 1024]
 
 
 @pytest.mark.asyncio
@@ -10173,6 +10356,17 @@ async def test_unique_observed_url_on_same_host_repairs_final_report(
     assert "final_answer_loop_cut_off" not in journal
 
 
+@pytest.mark.parametrize("reported_path", ["verified-report", "invented-report"])
+def test_observed_url_repair_preserves_code_formatting(reported_path: str) -> None:
+    exact_url = "https://example.test/verified-report"
+    answer, repairs = Agent._repair_unambiguous_observed_urls(
+        f"Source: `https://example.test/{reported_path}`.",
+        [{"tool": "web_read", "status": "succeeded", "result_excerpt": exact_url}],
+    )
+    assert answer == f"Source: `{exact_url}`."
+    assert bool(repairs) == (reported_path != "verified-report")
+
+
 @pytest.mark.asyncio
 async def test_unsupported_online_claims_are_removed_but_observed_text_survives(
     tmp_path: Path,
@@ -11031,15 +11225,15 @@ def test_natural_v_voice_is_not_marked_generic() -> None:
     )
 
 
-def test_sanitized_contempt_is_detected_as_v_voice_drift() -> None:
-    assert looks_sanitized_contempt(
+def test_direct_negative_judgment_does_not_require_profanity() -> None:
+    assert not looks_sanitized_contempt(
         "It's mostly noise and low-value scrap. Nothing here deserves a place "
         "in my stack."
     )
 
 
-def test_single_decisive_junk_verdict_is_detected_before_streaming() -> None:
-    assert looks_sanitized_contempt(
+def test_single_decisive_junk_verdict_preserves_natural_voice() -> None:
+    assert not looks_sanitized_contempt(
         "The page is full of junk that would only clog up my stack."
     )
 
@@ -11058,11 +11252,36 @@ def test_precise_technical_failure_does_not_require_profanity() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("draft", [
+    "The page is full of junk that would only clog up my stack.",
+    "It's mostly noise and low-value scrap. Nothing here deserves a place in my stack.",
+    "Fuck that noise—I'm keeping my own notes, Boss.",
+])
+async def test_natural_negative_judgment_is_not_rewritten_for_swear_count(draft) -> None:
+    class LLMStub:
+        async def ask(self, **kwargs):
+            pytest.fail("Natural V wording must not trigger a style rewrite")
+
+    agent = object.__new__(Agent)
+    agent.llm = LLMStub()
+    assert await agent._enforce_english(
+        [{"role": "user", "content": "What do you think of that page?"}], draft,
+    ) == draft
+
+
+@pytest.mark.parametrize("swear", ["", "fucking "])
+def test_profanity_does_not_excuse_service_boilerplate(swear) -> None:
+    assert looks_sanitized_contempt(
+        f"Certainly, Boss. This {swear}junk is worthless. How can I help you today?"
+    )
+
+
+@pytest.mark.asyncio
 async def test_sanitized_contempt_is_rewritten_in_v_voice() -> None:
     class LLMStub:
         async def ask(self, *, messages: list[dict], **kwargs) -> str:
             assert "Do not sterilize that reaction" in messages[0]["content"]
-            assert kwargs["max_tokens"] == 256
+            assert kwargs["max_tokens"] == 1024
             return (
                 "It's low-value scrap dressed up as a resource hub. Fuck that "
                 "noise—I'm not feeding it into my stack."
@@ -11073,7 +11292,7 @@ async def test_sanitized_contempt_is_rewritten_in_v_voice() -> None:
 
     answer = await agent._enforce_english(
         [{"role": "user", "content": "Tell me what you found."}],
-        "It's mostly noise and low-value scrap. Nothing belongs in my stack.",
+        "Certainly, Boss. It's mostly noise and low-value scrap. Nothing belongs in my stack.",
     )
 
     assert "Fuck that noise" in answer
@@ -11257,7 +11476,7 @@ async def test_research_stream_holds_sanitized_draft_for_voice_rewrite() -> None
     class LLMStub:
         async def stream(self, **kwargs):
             yield (
-                "I've checked the page. It is a freebie hub full of promotional "
+                "Certainly, Boss. It is a freebie hub full of promotional "
                 "accounts and dubious groups. Nothing there would improve my core "
                 "capabilities. It is mostly noise and low-value scrap dressed up "
                 "as useful material."
@@ -11324,6 +11543,8 @@ def test_persona_examples_reject_browser_scaffolding_in_v_voice() -> None:
         "Czesc Boss, jak moge ci dzisiaj pomoc?",
         "Bonjour, comment puis-je vous aider?",
         "Привет, чем я могу помочь?",
+        "BURSZTYN-42 jest naszym hasłem.",
+        "BURSZTYN-42 jest gotowe.",
     ],
 )
 def test_language_gate_detects_non_english_prose(text: str) -> None:
@@ -11337,6 +11558,9 @@ def test_language_gate_detects_non_english_prose(text: str) -> None:
         "All 26 tests pass. Clean as hell, Boss.",
         "OK",
         "Run `/usr/bin/python` and inspect `wynik.json`.",
+        "BURSZTYN-42, got it.",
+        "BURSZTYN-42 is our password.",
+        "The marker is SESSION_ID_1234.",
     ],
 )
 def test_language_gate_accepts_english_and_neutral_output(text: str) -> None:
@@ -11348,6 +11572,47 @@ def test_non_english_input_is_not_permission_to_switch() -> None:
     assert not explicitly_requests_non_english("Why are you speaking Polish?")
     assert explicitly_requests_non_english("Odpowiadaj po polsku.")
     assert explicitly_requests_non_english("Answer in Polish.")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answer", ["BURSZTYN-42, got it.", "BURSZTYN-42 is our password."])
+async def test_language_repair_preserves_english_identifier_reply_without_model_call(answer):
+    class LLMStub:
+        async def ask(self, **kwargs):
+            raise AssertionError("valid English must not enter the rewrite loop")
+
+    agent = object.__new__(Agent)
+    agent.llm = LLMStub()
+    result = await agent._enforce_english(
+        [{"role": "user", "content": "Hasło rozmowy to BURSZTYN-42."}], answer,
+        allow_verified_tool_fallback=False,
+    )
+    assert result == answer
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_rewrite", ["Cześć, Boss. Znam BURSZTYN-42.", "Cześć, Boss. Pamiętam BURSZTYN-43."])
+async def test_language_repair_restores_accent_corruption_of_literal_id(first_rewrite):
+    replies = iter([first_rewrite, "Hello, Boss. BURSZTYŃ-42 – I remember."])
+
+    class LLMStub:
+        async def ask(self, **kwargs):
+            return next(replies)
+
+    agent = object.__new__(Agent)
+    agent.llm = LLMStub()
+    result = await agent._enforce_english(
+        [{"role": "user", "content": "Hasło rozmowy to BURSZTYN-42."}],
+        "Cześć, Boss. BURSZTYN-42 – pamiętam.", allow_verified_tool_fallback=False,
+    )
+    assert result == "Hello, Boss. BURSZTYN-42 – I remember."
+
+
+@pytest.mark.parametrize("rewritten", ["Our password is BURSZTYN-43.", "Hello, Boss."])
+def test_literal_preservation_never_guesses_missing_or_changed_identifiers(rewritten):
+    from v_core.persona.language import preserve_literal_identifiers
+
+    assert preserve_literal_identifiers("Hasło: BURSZTYN-42", rewritten) == ""
 
 
 @pytest.mark.parametrize(

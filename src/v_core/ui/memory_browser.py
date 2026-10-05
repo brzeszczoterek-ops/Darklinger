@@ -19,7 +19,7 @@ _MAX_BYTES = 2 * 1024 * 1024
 def _text(value: Any, limit: int = 12000) -> str:
     if not isinstance(value, str):
         return ""
-    return value if len(value) <= limit else value[:limit] + "\n[… skrócono podgląd]"
+    return value if len(value) <= limit else value[:limit] + "\n[… view truncated]"
 
 
 def _view(data: dict) -> dict:
@@ -46,7 +46,7 @@ def _view(data: dict) -> dict:
 
 def _read_archive(memoir: Any, session_id: str) -> dict:
     if not _SESSION_ID.fullmatch(session_id):
-        raise ValueError("Nieprawidłowy identyfikator sesji.")
+        raise ValueError("Invalid session ID.")
     # Pin the directory and reject symlinks, including a swapped leaf file.
     directory = os.open(memoir.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
@@ -55,16 +55,16 @@ def _read_archive(memoir: Any, session_id: str) -> dict:
         with os.fdopen(fd, "rb") as handle:
             info = os.fstat(handle.fileno())
             if not stat.S_ISREG(info.st_mode) or info.st_size > _MAX_BYTES:
-                raise ValueError("Plik nie jest zwykłym plikiem lub przekracza limit podglądu 2 MiB.")
+                raise ValueError("The file is not a regular file or exceeds the 2 MiB view limit.")
             raw = handle.read(_MAX_BYTES + 1)
             if len(raw) > _MAX_BYTES:
-                raise ValueError("Przekroczono limit podglądu 2 MiB.")
+                raise ValueError("The 2 MiB view limit was exceeded.")
             data = json.loads(raw)
     finally:
         os.close(directory)
     if (not isinstance(data, dict) or data.get("schema_version") != 1
             or data.get("kind") != "session_memoir" or data.get("session_id") != session_id):
-        raise ValueError("Nieobsługiwany lub uszkodzony zapis wspomnienia.")
+        raise ValueError("Unsupported or corrupt memoir archive.")
     return _view(data)
 
 
@@ -77,27 +77,27 @@ def browse(runtime: Any, *, view: str, session_id: str = "current") -> dict:
         persona = getattr(agent, "persona", None)
         sections = []
         if persona is not None:
-            for field, label in (("identity", "Tożsamość"), ("voice", "Styl wypowiedzi"),
-                                 ("constitution", "Zasady persony")):
+            for field, label in (("identity", "Identity"), ("voice", "Voice"),
+                                 ("constitution", "Persona principles")):
                 component = getattr(persona, field, None)
                 if component is not None:
                     sections.append({"title": label, "text": _text(component.render(), 32000)})
             relationship = getattr(getattr(agent, "memory", None), "relationship_state", None)
             if archive_allowed and relationship is not None:
-                sections.append({"title": "Bieżący składnik persony dla modelu (podgląd)",
+                sections.append({"title": "Current persona context for the model (preview)",
                                  "text": _text(persona.build_runtime(relationship), 32000)})
         return {"sections": sections, "delivery_verified": False,
-                "notice": "Podgląd konfiguracji, nie pełny prompt ani dowód wysłania do modelu. "
-                          "Public nie pokazuje danych relacji z wcześniejszych sesji."}
+                "notice": "Configuration preview, not the full prompt or proof of delivery to the model. "
+                          "Public does not show relationship data from previous sessions."}
     if view == "sessions":
         sessions = []
         limited = False
         if memoir is not None:
-            sessions.append({"id": "current", "label": "Bieżąca sesja", "started_at": memoir.started})
+            sessions.append({"id": "current", "label": "Current session", "started_at": memoir.started})
             if archive_allowed:
                 try:
                     if memoir.root.is_symlink():
-                        raise ValueError("Archiwum nie może być dowiązaniem symbolicznym.")
+                        raise ValueError("The archive must not be a symbolic link.")
                     with os.scandir(memoir.root) as entries:
                         names = []
                         for index, entry in enumerate(entries):
@@ -116,9 +116,9 @@ def browse(runtime: Any, *, view: str, session_id: str = "current") -> dict:
                     pass
         return {"sessions": sessions, "archive_allowed": archive_allowed, "limited": limited}
     if view != "session":
-        raise ValueError("Nieznany widok.")
+        raise ValueError("Unknown view.")
     if session_id != "current" and not archive_allowed:
-        raise PermissionError("Public udostępnia tylko bieżącą sesję.")
+        raise PermissionError("Public provides access to the current session only.")
     if memoir is None:
         return {"available": False}
     if session_id != "current":

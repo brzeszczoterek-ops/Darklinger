@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .provenance import ground_reflection, ground_derived
+
 from typing import Any
 
 from .session import Session
@@ -79,6 +81,7 @@ class MemoryEngine:
                     execution=execution,
                 )
 
+            ground_reflection(reflection, task, execution)
             stored_reflection = self.manager.remember(
                 "reflections",
                 reflection,
@@ -117,6 +120,7 @@ class MemoryEngine:
                 current_knowledge,
             )
 
+            ground_derived(experience, [reflection])
             # The memory LLM may propose behavioural lessons and preferences,
             # but it never gets to turn its own interpretation into active policy.
             # Verified lessons backed by runtime evidence may remain automatic;
@@ -205,6 +209,7 @@ class MemoryEngine:
                 knowledge,
             )
 
+            ground_derived(summary, experiences)
             self.manager.remember(
                 "summaries",
                 summary,
@@ -227,6 +232,7 @@ class MemoryEngine:
                 )
             )
 
+            ground_derived(knowledge_entry, [summary])
             self.manager.remember(
                 "knowledge",
                 knowledge_entry,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from array import array
 import json
+import wave
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +17,7 @@ from v_core.speech import (
     VoiceSelection,
 )
 from v_core.speech.runtime import VoiceActivityDetector
+from v_core.speech import NoSpeechDetected
 
 
 def _pcm(value: int, samples: int = 1_600) -> bytes:
@@ -311,9 +313,11 @@ def test_push_to_talk_hotkey_is_disabled_for_noninteractive_input() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("pcm_level", [0, 30, 1000])
 async def test_push_to_talk_starts_and_stops_explicitly(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    pcm_level: int,
 ) -> None:
     config = SpeechConfig(
         root=tmp_path,
@@ -357,10 +361,13 @@ async def test_push_to_talk_starts_and_stops_explicitly(
     async def fake_subprocess(*command, **_kwargs):
         commands.append(tuple(str(item) for item in command))
         destination = Path(command[-1])
-        destination.write_bytes(b"W" * (44 + 16_000))
+        with wave.open(str(destination), "wb") as stream:
+            stream.setparams((1, 2, 16_000, 0, "NONE", "not compressed"))
+            stream.writeframes(_pcm(pcm_level, 8000))
         return FakeProcess()
 
     async def fake_transcribe(_recording: Path) -> str:
+        assert pcm_level == 1000, "Silent/background recording must not reach Whisper"
         return "Cześć V"
 
     monkeypatch.setattr(
@@ -375,7 +382,9 @@ async def test_push_to_talk_starts_and_stops_explicitly(
     assert "--target" in commands[0]
     assert "test-input" in commands[0]
 
-    transcript = await runtime.stop_push_to_talk()
-
-    assert transcript == "Cześć V"
+    if pcm_level == 1000:
+        assert await runtime.stop_push_to_talk() == "Cześć V"
+    else:
+        with pytest.raises(NoSpeechDetected, match="voice activity"):
+            await runtime.stop_push_to_talk()
     assert runtime.push_to_talk_recording is False

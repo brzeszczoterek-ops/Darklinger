@@ -97,6 +97,10 @@ _FILESYSTEM_MUTATION_TOOLS = {
     "write_file",
 }
 _FILESYSTEM_READ_TOOLS = {
+    "document_read",
+    "image_analyze",
+    "audio_transcribe",
+    "audio_analyze",
     "directory_tree",
     "get_file_info",
     "list_directory",

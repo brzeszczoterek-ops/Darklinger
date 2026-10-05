@@ -86,29 +86,24 @@ def test_total_attempt_cap_includes_successes_and_never_resets():
     assert not evaluate(calls).admit(candidate(9), "new model")[0]
 
 
-def test_time_budget_survives_serialization():
+def test_elapsed_time_survives_serialization_without_becoming_stop_reason():
     entry = call()
     now = datetime.now(timezone.utc)
     entry["started_at"] = (now - timedelta(seconds=601)).isoformat()
     state = evaluate(json.loads(json.dumps([entry])), now=now)
-    assert state.stop_reason == "time_budget"
+    assert state.stop_reason == ""
     assert state.remaining_seconds == 0
 
 
 @pytest.mark.asyncio
-async def test_deadline_cancels_inflight_local_operation():
+async def test_old_creation_receipt_does_not_cancel_inflight_local_operation():
     entry = call()
     entry["started_at"] = (datetime.now(timezone.utc) - timedelta(seconds=601)).isoformat()
-    cancelled = []
     async def slow():
-        try:
-            await asyncio.sleep(1)
-        finally:
-            cancelled.append(True)
+        await asyncio.sleep(.02)
+        return "completed"
     agent = object.__new__(Agent)
-    with pytest.raises(TimeoutError):
-        await agent._await_creation_step(slow(), [entry])
-    assert cancelled == [True]
+    assert await agent._await_creation_step(slow(), [entry]) == "completed"
 
 
 def test_formatting_comments_and_diagnostic_text_are_not_new_approaches():

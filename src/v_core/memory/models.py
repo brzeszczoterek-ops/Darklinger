@@ -55,6 +55,8 @@ class ReflectionEntry:
 
     source: MemorySource = MemorySource.SELF_GENERATED
 
+    evidence_refs: list[dict[str, str]] = field(default_factory=list)
+
 
 @dataclass
 class ExperienceEntry:
@@ -74,6 +76,8 @@ class ExperienceEntry:
     kind: MemoryKind = MemoryKind.EXPERIENCE
 
     source: MemorySource = MemorySource.SELF_GENERATED
+
+    evidence_refs: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -97,6 +101,8 @@ class SummaryEntry:
 
     source: MemorySource = MemorySource.SELF_GENERATED
 
+    evidence_refs: list[dict[str, str]] = field(default_factory=list)
+
 
 @dataclass
 class KnowledgeEntry:
@@ -116,6 +122,8 @@ class KnowledgeEntry:
     kind: MemoryKind = MemoryKind.FACT
 
     source: MemorySource = MemorySource.INFERRED
+
+    evidence_refs: list[dict[str, str]] = field(default_factory=list)
 
     # "always" is reserved for stable preferences and generic reversible
     # behavioural lessons. Topic memories remain dormant until explicitly

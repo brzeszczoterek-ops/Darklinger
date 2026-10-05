@@ -118,7 +118,7 @@ def test_ui_uses_darklinger_public_identity() -> None:
     assert "<title>DARKLINGER // V</title>" in index.text
     assert '<div class="brand-mark">D</div>' in index.text
     assert "<h1>DARKLINGER <span>// V</span></h1>" in index.text
-    assert "Natychmiast zatrzymaj Darklingera i model, bez wspomnienia" in index.text
+    assert "Stop Darklinger and the model immediately without saving a memoir" in index.text
 
 
 def test_ui_accepts_legacy_session_header_during_rename() -> None:
@@ -455,3 +455,25 @@ def test_new_ui_keeps_owner_decisions_without_owner_deck_cards():
     assert 'id="proposal-list"' in html and 'id="emergency-stop"' in html
     javascript = client.get("/assets/app.js").text
     assert "console.textContent = result.text" in javascript
+
+
+def test_job_status_and_authorized_stop_work_when_model_process_has_exited(tmp_path):
+    from v_core.tool_supervision import ToolSupervisor, ToolJob
+    runtime = _runtime()
+    supervisor = ToolSupervisor(tmp_path / 'monitor')
+    job = ToolJob('job-test', 'full_tor_fetch', {}, 'turn', state='running')
+    supervisor.jobs[job.id] = job
+    runtime.core.agent.tools.supervisor = supervisor
+    runtime.model_session.process = SimpleNamespace(poll=lambda: 7)
+    client = TestClient(create_app(runtime))
+    headers = {'X-DARKLINGER-Session': runtime.session_token}
+    response = client.get('/api/status', headers=headers)
+    assert response.json()['model']['state'] == 'stopped'
+    assert response.json()['tool_supervision']['jobs'][0]['state'] == 'running'
+    assert client.post('/api/tool-jobs/job-test/cancel').status_code == 403
+    assert not job.cancel.is_set()
+    assert client.post('/api/tool-jobs/unknown/cancel', headers=headers).status_code == 404
+    stopped = client.post('/api/tool-jobs/job-test/cancel', headers=headers)
+    assert stopped.status_code == 200
+    assert stopped.json()['job']['state'] == 'stopping'
+    assert job.cancel.is_set()

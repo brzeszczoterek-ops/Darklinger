@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .provenance import ground_reflection
+
 import json
 from typing import Any
 
@@ -167,31 +169,7 @@ Output ONLY JSON.
         except ValueError:
             kind = MemoryKind.LESSON
 
-        try:
-            source = MemorySource(
-                data.get(
-                    "source",
-                    MemorySource.SELF_GENERATED.value,
-                )
-            )
-        except ValueError:
-            source = MemorySource.SELF_GENERATED
-
-        successful_tool_count = 0
-        if execution is not None:
-            try:
-                successful_tool_count = int(
-                    execution.get("successful_tool_count", 0)
-                )
-            except (TypeError, ValueError):
-                successful_tool_count = 0
-        if (
-            successful_tool_count <= 0
-            and source in {MemorySource.OBSERVED, MemorySource.VERIFIED}
-        ):
-            source = MemorySource.SELF_GENERATED
-
-        return ReflectionEntry(
+        entry = ReflectionEntry(
             task=task,
             result=result,
             summary=data.get("summary", ""),
@@ -199,5 +177,8 @@ Output ONLY JSON.
             importance=data.get("importance", "low"),
             remember=bool(data.get("remember", False)),
             kind=kind,
-            source=source,
+            source=MemorySource.SELF_GENERATED,
         )
+
+        ground_reflection(entry, task, execution)
+        return entry

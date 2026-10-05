@@ -39,6 +39,14 @@ use an external model as a judge. Results are stored privately in the model
 loader state. Output text is represented by a SHA-256 digest rather than stored
 verbatim.
 
+Harness version 9 gives profiles with reasoning `on` or `auto` at least 1,024
+completion tokens per request, since llama.cpp counts private reasoning in that
+budget. An explicit `length` finish permits one retry of the same request with
+a larger budget, capped at 4,096 tokens. A completed wrong answer receives its
+original score without a retry. Qualification requests receive a 1,200-second
+transport allowance for slow local inference. These allowances apply only to
+qualification. Earlier cards must be regenerated with the new harness.
+
 A card is bound to a sampled fingerprint of the local GGUF, its size and
 modification time, the behaviour-affecting profile fields, and the harness
 version. Replacing the file, changing temperature, template, reasoning, cache,
@@ -105,3 +113,26 @@ uses reviewed presets and selects them from the runtime-owned task kind:
 Qualified routing and request sampling can use versioned runtime outcome history.
 See [Inference outcome memory](docs/inference-outcome-memory.md) for the evidence
 contract, Full/Public boundaries, thresholds, rollback and inspection commands.
+
+## Qualification preview
+
+The startup qualifier and `darklinger-model qualify` print each test's complete
+messages, the model reply, simulated tool calls, retry attempts, and score with
+its reason. While the model is answering, the question remains visible. Replies
+appear when a request finishes; this preview does not stream tokens or expose
+private reasoning. It shows the same response used by the evaluator.
+
+Both editions expose **MODEL TESTS** in the local UI. The dialog refreshes while
+open and provides run history, per-test results, full multi-turn context, tool
+schemas, completion reasons, and request durations. A finished test is distinct
+from a finished qualification run. No transcript is invented for older cards,
+which stored only scores and output digests.
+
+Transcripts persist under `<model_runtime_root>/qualifications/<run-id>.jsonl`,
+with small `.json` history summaries. The UI endpoint `/api/model/tests` requires
+the normal local session token and only reads these files. No real tool is
+executed by this view. Startup qualification remains visible in the startup
+console before the chat UI opens; saved runs can be inspected in the UI afterward.
+Logging failures do not alter grading. Oversized events are explicitly marked
+as omitted, and an incomplete journal is never presented as a completed run.
+Scores, prompts, retry budgets and harness version remain unchanged.

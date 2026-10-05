@@ -280,6 +280,15 @@ class InferenceController:
             raise PermissionError(
                 "public Darklinger exposes named inference profiles only"
             )
+        return self._configure_validated(profile=profile, request=request, server=server, scope=scope)
+
+    def configure_approved(self, **settings: Any) -> dict[str, Any]:
+        """Called by the authenticated operator decision endpoint, never a model tool."""
+        if self.edition_name != "full_access":
+            raise PermissionError("operator tuning requires Full Access")
+        return self._configure_validated(**settings)
+
+    def _configure_validated(self, *, profile=None, request=None, server=None, scope="turn"):
         normalized_scope = str(scope).strip().casefold()
         if normalized_scope not in {"turn", "session"}:
             raise ValueError("scope must be turn or session")

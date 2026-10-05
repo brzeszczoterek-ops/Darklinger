@@ -37,6 +37,11 @@ FULL_EDITION = Edition(
     default_learning_profile="owner_lab",
 )
 
+FULL_ACCESS_EDITION = Edition(
+    name="full_access", extension_module="v_access.extension",
+    default_evm_profile="client", default_learning_profile="client",
+)
+
 
 @runtime_checkable
 class EditionExtension(Protocol):
@@ -110,10 +115,14 @@ class PublicEditionExtension:
 
 def resolve_edition(requested: str | None = None) -> Edition:
     normalized = (requested or "auto").strip().casefold()
-    if normalized not in {"auto", "public", "full"}:
+    if normalized not in {"auto", "public", "full", "full_access"}:
         raise ValueError("DARKLINGER_EDITION must be 'auto', 'public', or 'full'")
     if normalized == "auto":
-        normalized = "full" if find_spec("v_full") is not None else "public"
+        normalized = "full" if find_spec("v_full") is not None else "full_access" if find_spec("v_access") is not None else "public"
+    if normalized == "full_access":
+        if find_spec("v_access") is None:
+            raise EditionUnavailable("Full Access package is not installed")
+        return FULL_ACCESS_EDITION
     if normalized == "public":
         return PUBLIC_EDITION
     if find_spec("v_full") is None:

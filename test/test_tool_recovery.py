@@ -102,6 +102,7 @@ async def test_mcp_creation_failure_repair_and_retest_cycle(tmp_path: Path) -> N
         '    value = arguments["value"]\n'
         '    return {"result": 0 if value == 0 else 10 // value}\n'
     )
+    tools.interaction_prompt = 'arguments = {"value": 0} expected = {"result": 0}'
     repair_result = json.loads(
         await tools._call_direct(
             "learning_create_repair_adapter",
@@ -277,7 +278,7 @@ async def test_agent_completes_failure_repair_and_retest_cycle(tmp_path: Path) -
 
     answer = await agent._run_agent_loop(
         "Run safe_divide_ten with value 0. If it fails, repair it, retest the "
-        "same input, and report the verified result."
+        'same input, and report the verified result. arguments = {"value": 0} expected = {"result": 0}'
     )
     await asyncio.gather(*agent._memory_tasks)
 
@@ -600,6 +601,7 @@ async def test_generated_repair_replays_runtime_fixture_before_activation(
         description="Repair integer doubling from the captured failure fixture.",
         source='def run(arguments):\n    return {"result": arguments["value"] * 2}',
         expected={"result": 14},
+        owner_objective='arguments = {"value": 7} expected = {"result": 14}',
     )
 
     assert record.status.value == "active"
@@ -662,3 +664,56 @@ def test_task_contract_accepts_equivalent_capability_provider() -> None:
     ]
 
     assert contract.unmet(calls) == []
+
+
+@pytest.mark.asyncio
+async def test_tor_target_timeouts_allow_v_to_retry_with_more_time(tmp_path: Path) -> None:
+    registry = ToolRecoveryRegistry(tmp_path / "recovery")
+    registry.register_provider("full_tor_search", ("network.tor.search",))
+    budgets = []
+
+    async def request(_tool, arguments):
+        budgets.append(arguments["timeout_seconds"])
+        if arguments["timeout_seconds"] < 180:
+            raise RuntimeError("TorRequestTimeoutError: Tor request exceeded its budget")
+        return '{"ok": true, "results": []}'
+
+    for budget in [30, 60, 180]:
+        outcome = await execute_with_recovery(
+            registry, requested_tool="full_tor_search", arguments={"timeout_seconds": budget},
+            call_provider=request, detect_failure=lambda _result, _tool: "",
+        )
+        assert bool(outcome.error) == (budget < 180)
+    assert budgets == [30, 60, 180]
+    state = registry.provider_state()[0]
+    assert state["total_failures"] == 2
+    assert state["successful_calls"] == 1
+    assert not state["circuit_open"]
+
+
+def test_legacy_tor_target_timeout_circuit_is_healed_on_lookup(tmp_path: Path) -> None:
+    registry = ToolRecoveryRegistry(tmp_path / "recovery")
+    provider = registry.register_provider("full_tor_search", ("network.tor.search",))
+    provider.circuit_open = True
+    provider.consecutive_failures = 2
+    provider.last_error = "HostBridgeError: Tor request failed (HTTP unknown): curl: (28) Connection timed out"
+    assert registry.providers_for("full_tor_search") == [provider]
+    assert not provider.circuit_open
+
+
+def test_timeout_exception_marker_does_not_disable_circuits_for_other_providers(tmp_path: Path) -> None:
+    registry = ToolRecoveryRegistry(tmp_path / "recovery")
+    registry.register_provider("unrelated_provider", ("generated.unrelated_provider",))
+    for _ in range(2):
+        registry.record_failure(tool="unrelated_provider", requested_tool="unrelated_provider",
+                                arguments={}, error="TorRequestTimeoutError: example failure")
+    assert registry.provider_state()[0]["circuit_open"]
+
+
+def test_tor_connection_service_failure_still_opens_circuit(tmp_path: Path) -> None:
+    registry = ToolRecoveryRegistry(tmp_path / "recovery")
+    registry.register_provider("full_tor_fetch", ("network.tor.fetch",))
+    for _ in range(2):
+        registry.record_failure(tool="full_tor_fetch", requested_tool="full_tor_fetch",
+                                arguments={}, error="HostBridgeError: curl: (7) Failed to connect to SOCKS service")
+    assert registry.provider_state()[0]["circuit_open"]

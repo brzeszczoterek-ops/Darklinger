@@ -1,5 +1,7 @@
 import json
+import asyncio
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,6 +13,12 @@ from v_core.generated_tool_contract import (
 )
 from v_core.learning import ArtifactValidationError
 from v_core.tool_recovery import ToolRecoveryRegistry, execute_with_recovery
+from v_core.learning.source_builder import MissingToolInputError, build_source_blueprint
+from v_core.llm.llm import LLMResponse
+from v_core.memory.session import Session
+from v_core.persona.kernel import IdentityKernel
+from v_core.persona.runtime import PersonaRuntime
+from v_core.persona.voice import VoiceProfile
 
 
 def contract_prompt():
@@ -132,6 +140,91 @@ def test_source_context_without_contract_keeps_original_prompt():
     messages = Agent._generated_source_messages(prompt, generated_contract=None, failures=[])
     assert messages[1]['content'] == prompt
     assert len(messages) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('fields', [('image',), ('text', 'coordinates')])
+@pytest.mark.parametrize('route', ['source', 'compatibility', 'native'])
+async def test_missing_creation_input_awaits_owner_without_call_or_retry(tmp_path, fields, route):
+    class Tools:
+        calls = []
+
+        async def openai_tool_definitions(self):
+            return [{'type': 'function', 'function': {
+                'name': 'learning_create_tool', 'description': 'Create a local tool',
+                'parameters': {'type': 'object', 'properties': {'source': {'type': 'string'}},
+                               'required': ['source']},
+            }}]
+
+        async def call(self, tool, arguments):
+            self.calls.append(tool)
+            raise AssertionError('Missing input must pause before creating an artifact')
+
+    source = 'def run(arguments):\n    return {' + ', '.join(
+        f'{field!r}: arguments[{field!r}]' for field in fields) + '}\n'
+
+    class Model:
+        config = SimpleNamespace(context=12_000, model='test-model')
+        turns = 0
+
+        async def respond(self, **kwargs):
+            self.turns += 1
+            assert self.turns == 1, 'Missing data must not trigger another model request'
+            if route == 'native':
+                from v_core.llm.llm import LLMToolCall
+                return LLMResponse(content='', tool_calls=[LLMToolCall(
+                    name='learning_create_tool', arguments={'source': source}, call_id='create1')])
+            if route == 'compatibility':
+                return LLMResponse(content=json.dumps({'tool': 'learning_create_tool', 'arguments': {'source': source}}))
+            return LLMResponse(content=source)
+
+    class Memory:
+        session = Session()
+
+        async def process(self, *args, **kwargs):
+            pass
+
+    agent = object.__new__(Agent)
+    agent.tools, agent.llm, agent.memory = Tools(), Model(), Memory()
+    agent.persona = PersonaRuntime(identity=IdentityKernel(), voice=VoiceProfile())
+    agent._build_system_prompt = lambda prompt, agent_mode: 'system'
+    agent._agent_trace_root = tmp_path / 'traces'
+    streamed = []
+    prompt = 'Create a reusable local tool.' if route == 'source' else 'Create a tool or a skill to process data.'
+    answer = await agent._run_agent_loop(prompt, streamed.append)
+    await asyncio.gather(*agent._memory_tasks)
+
+    assert agent.tools.calls == []
+    assert agent.llm.turns == 1
+    assert 'known correct result' in answer
+    assert 'not executed or activated' in answer
+    assert streamed == [answer]
+    checkpoint = json.loads(next((tmp_path / 'traces' / 'checkpoints').glob('*.json')).read_text())
+    assert checkpoint['status'] == 'awaiting_owner'
+    assert checkpoint['tool_calls'] == []
+    assert agent._last_execution_context['status'] == 'awaiting_owner'
+    journal = next((tmp_path / 'traces' / 'journal').glob('*.jsonl')).read_text()
+    assert 'generated_tool_input_missing' in journal
+    assert 'creation_failure_budget_exhausted' not in journal
+
+
+def test_missing_input_has_structured_fields_and_concrete_fixture_still_works():
+    source = "def run(arguments):\n    return {'width': arguments['image']['width']}"
+    with pytest.raises(MissingToolInputError) as caught:
+        build_source_blueprint(objective='Build an image data helper.', source=source)
+    assert caught.value.fields == ('image',)
+    blueprint = build_source_blueprint(
+        objective='image = {"width": 20} expected = {"width": 20}', source=source)
+    assert blueprint.arguments == {'image': {'width': 20}}
+    assert blueprint.expected == {'width': 20}
+
+
+def test_observed_snapshot_remains_valid_input_for_preflight():
+    blueprint = build_source_blueprint(
+        objective='Create a parser.', observed_snapshot='actual captured page',
+        source="def run(arguments):\n    return {'text': arguments['snapshot_text']}",
+    )
+    assert blueprint.arguments == {'snapshot_text': 'actual captured page'}
 
 
 @pytest.mark.asyncio

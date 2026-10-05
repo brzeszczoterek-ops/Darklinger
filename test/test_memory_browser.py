@@ -67,7 +67,7 @@ def test_archives_are_bounded_untrusted_and_read_only(tmp_path, edition):
     assert data["verified"] is False
     assert data["omitted_turns"] == 10
     assert len(data["turns"]) == 50
-    assert "skrócono" in data["turns"][0]["user"]
+    assert "truncated" in data["turns"][0]["user"]
     assert "not exposed" not in result.text
     assert path.read_bytes() == before
 

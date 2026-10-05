@@ -10,6 +10,7 @@ import re
 import signal
 import tempfile
 import time
+import wave
 
 from .config import SpeechConfig
 
@@ -140,9 +141,30 @@ class SpeechRuntime:
                 ) from error
             if payload_bytes < minimum_bytes:
                 raise NoSpeechDetected("That recording was too short. Try again.")
+            if not self._recording_has_activity(recording):
+                raise NoSpeechDetected("No voice activity above the microphone threshold. Try speaking closer to the microphone.")
             return await self._transcribe(recording)
         finally:
             directory.cleanup()
+
+    def _recording_has_activity(self, recording: Path) -> bool:
+        detector = VoiceActivityDetector(
+            threshold=self.config.speech_threshold,
+            minimum_speech_seconds=self.config.minimum_speech_seconds,
+            end_silence_seconds=self.config.end_silence_seconds,
+        )
+        try:
+            with wave.open(str(recording), "rb") as stream:
+                if stream.getsampwidth() != 2 or stream.getnchannels() != 1:
+                    raise SpeechRuntimeError("Microphone returned unsupported PCM audio")
+                rate = stream.getframerate()
+                while chunk := stream.readframes(max(1, rate // 20)):
+                    detector.feed(chunk, len(chunk) / (2 * rate))
+                    if detector.started:
+                        return True
+        except (OSError, EOFError, wave.Error) as error:
+            raise SpeechRuntimeError("Microphone returned an invalid WAV recording") from error
+        return False
 
     async def cancel_push_to_talk(self) -> None:
         process = self._ptt_process

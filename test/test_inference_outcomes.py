@@ -371,7 +371,7 @@ async def test_router_uses_outcomes_but_stale_card_cannot_be_resurrected(tmp_pat
         profiles[key] = profile
         cards[key] = ModelQualificationCard(model_path=key, model_fingerprint=model_file_fingerprint(path),
             profile_fingerprint=model_profile_fingerprint(profile), qualified_at="2026-09-17T00:00:00Z",
-            harness_version=8, capabilities={k: 90 for k in MODEL_CAPABILITIES},
+            harness_version=9, capabilities={k: 90 for k in MODEL_CAPABILITIES},
             probes=(QualificationProbeResult(name="fixture", score=90, passed=True, latency_ms=1, output_digest=H),))
     a, b = profiles
     root = tmp_path / "runtime"

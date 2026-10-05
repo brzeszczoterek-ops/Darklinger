@@ -62,7 +62,7 @@ def model_log(session: Any) -> dict[str, Any]:
     """Bounded tail of the runtime-owned log, never a client-selected file."""
     path = getattr(session, "log_path", None)
     if path is None or not Path(path).is_file():
-        return {"available": False, "text": "Brak lokalnego logu tego backendu.", "source": ""}
+        return {"available": False, "text": "This backend has no local log.", "source": ""}
     path = Path(path)
     text = _tail(path, 64 * 1024)
     # Strip terminal escape sequences, including OSC/hyperlinks and C0 controls.

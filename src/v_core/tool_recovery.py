@@ -24,6 +24,13 @@ def utc_now() -> str:
 
 
 BUILTIN_TOOL_CAPABILITIES: dict[str, tuple[str, ...]] = {
+    "image_metadata": ("filesystem.image_metadata",),
+    "image_analyze": ("filesystem.image_visual_observation",),
+    "document_read": ("filesystem.document_read",),
+    "audio_transcribe": ("filesystem.audio_transcription",),
+    "audio_analyze": ("filesystem.audio_observation",),
+    "browser_vision": ("browser.visual_observation",),
+    "perception_status": ("perception.status",),
     "cat": ("filesystem.read",),
     "read_file": ("filesystem.read",),
     "ls": ("filesystem.list",),
@@ -104,6 +111,22 @@ def generated_capability_is_repairable(capability: str) -> bool:
     return capability.startswith("generated.")
 
 
+def _is_target_timeout(tool: str, error: str) -> bool:
+    """A slow Tor target does not establish an outage of the host provider."""
+    if tool not in {
+        "full_tor_search", "full_tor_fetch", "full_tor_inventory",
+        "full_tor_browser_inventory",
+    }:
+        return False
+    text = " ".join(str(error).casefold().split())
+    return any(marker in text for marker in (
+        "torrequesttimeouterror:",
+        "tor request failed (http unknown): curl: (28)",
+        "tor request exceeded its host timeout",
+        "interactive tor navigation failed: timeouterror:",
+    ))
+
+
 def _is_call_rejection(error: str, exception: Exception | None = None) -> bool:
     """Distinguish invalid call data from an unhealthy provider.
 
@@ -130,6 +153,7 @@ def _is_call_rejection(error: str, exception: Exception | None = None) -> bool:
             "credentials are not accepted in a tor url",
             "tor web fetch accepts only ports 80 and 443",
             "timeout_seconds must be a number",
+            "timeout_seconds must be from",
             "provide either \"text\" or \"regex\"",
             "arguments as json",
             "failed to parse tool call arguments",
@@ -319,7 +343,10 @@ class ToolRecoveryRegistry:
         for provider in self._providers.values():
             # Heal state persisted by older runtimes which treated malformed
             # model arguments as a provider outage.
-            if provider.circuit_open and _is_call_rejection(provider.last_error):
+            if provider.circuit_open and (
+                _is_call_rejection(provider.last_error)
+                or _is_target_timeout(provider.tool, provider.last_error)
+            ):
                 provider.circuit_open = False
                 provider.consecutive_failures = 0
                 provider.retry_after = ""
@@ -382,6 +409,7 @@ class ToolRecoveryRegistry:
         provider = self._providers.get(tool)
         if provider is None:
             provider = self.register_provider(tool, capabilities_for_tool(requested_tool))
+        affects_health = affects_health and not _is_target_timeout(tool, error)
         if affects_health:
             provider.consecutive_failures += 1
         else:

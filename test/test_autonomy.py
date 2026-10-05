@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from datetime import date
+from types import SimpleNamespace
 
 import pytest
 
@@ -36,6 +38,25 @@ from v_core.capabilities.web_target import extract_web_target, extract_web_targe
 from v_core.config import load_config
 
 
+@pytest.mark.asyncio
+async def test_intent_classifier_receives_runtime_date(monkeypatch) -> None:
+    import v_core.autonomy.intent as intent_module
+
+    class Clock:
+        @staticmethod
+        def now(tz):
+            return SimpleNamespace(date=lambda: date(2026, 10, 5))
+
+    class Parser:
+        async def ask(self, **kwargs):
+            assert "Current runtime date (UTC): 2026-10-05" in kwargs["messages"][0]["content"]
+            return '{"message_clear": true, "action_requested": false, "capabilities": []}'
+
+    monkeypatch.setattr(intent_module, "datetime", Clock)
+    intent = await MultilingualIntentRouter(Parser()).classify("Hello")
+    assert intent is not None
+
+
 def test_durable_memory_intent_requires_current_message_evidence() -> None:
     router = MultilingualIntentRouter(object())
     prompt = "Pamiętaj, że wolę krótkie raporty po polsku."
@@ -57,6 +78,22 @@ def test_durable_memory_intent_requires_current_message_evidence() -> None:
     )
     assert rejected is not None and not rejected.retain_memory
     assert "ungrounded_retain_memory" in router.last_sanitization_reason
+
+
+@pytest.mark.parametrize("execution", [
+    "a następnie rzeczywiście uruchom na final_arguments",
+    "potem rzeczywiscie uruchom na final_arguments",
+])
+def test_polish_emphasized_execution_requires_the_created_tool(execution: str) -> None:
+    contract = TaskContract.from_prompt(f"Stwórz narzędzie sumujące, {execution}.")
+    assert contract.requires_created_tool_execution
+    calls = [
+        {"tool": "learning_create_tool", "status": "succeeded",
+         "result_excerpt": json.dumps({"name": "sum_numbers"})},
+        {"tool": "sum_numbers", "status": "succeeded",
+         "result_excerpt": json.dumps({"sum": 15})},
+    ]
+    assert contract.unmet(calls) == []
 
 
 def test_task_contract_detects_polish_local_tool_and_required_use() -> None:
@@ -2531,7 +2568,7 @@ async def test_multilingual_intent_router_classifies_hungarian_action() -> None:
     assert intent.requires_report is True
     assert intent.web_query == "internetes kutatási eredmények"
     assert llm.kwargs["temperature"] == 0.0
-    assert llm.kwargs["max_tokens"] == 384
+    assert llm.kwargs["max_tokens"] == 2048
     assert llm.kwargs["response_format"]["type"] == "json_schema"
 
 
@@ -3750,6 +3787,52 @@ def test_task_contract_accepts_grounded_feature_labels_and_plural_protocol() -> 
     ) == []
 
 
+@pytest.mark.parametrize("label", [
+    "Trading & Logistics", "Trading & Technology", "Unresolved Gaps & Limitations",
+    "Specific Goods", "Membership Counts", "Market Overview & Statistics",
+    "Distinction", "Source Variety",
+])
+def test_report_labels_are_not_named_online_entities(label: str) -> None:
+    contract = TaskContract.from_prompt("Inspect https://example.test and report the result.")
+    calls = [{
+        "tool": "browser_snapshot", "status": "succeeded", "arguments": {},
+        "result_excerpt": "Page URL: https://example.test\nThe source provides no ranking.",
+    }]
+    assert contract.answer_issues(
+        f"**{label}**\n* **Note:** While the source provides no ranking, gaps remain.",
+        calls,
+    ) == []
+
+
+@pytest.mark.parametrize("label", [
+    "Trading FabricatedCrawler", "Scrapy FabricatedCrawler", "Technology FabricatedCrawler",
+    "Distinction FabricatedCrawler", "Source Variety FabricatedCrawler",
+])
+def test_sourced_or_generic_word_does_not_shield_invented_name(label: str) -> None:
+    contract = TaskContract.from_prompt("Inspect https://example.test and report the result.")
+    calls = [{
+        "tool": "browser_snapshot", "status": "succeeded", "arguments": {},
+        "result_excerpt": "Page URL: https://example.test\nScrapy supports trading data extraction.",
+    }]
+    assert contract.answer_issues(f"**{label}** is recommended.", calls) == [
+        "answer:ungrounded_online_claims=FabricatedCrawler"
+    ]
+
+
+def test_generic_abbreviation_and_source_backed_only_adjective() -> None:
+    contract = TaskContract.from_prompt("Inspect https://example.test and report the result.")
+    calls = [{
+        "tool": "browser_snapshot", "status": "succeeded", "arguments": {},
+        "result_excerpt": "Page URL: https://example.test\nEuropean darknet markets have no verified ranking.",
+    }]
+    assert contract.answer_issues(
+        'The source has no "European-only" ranking for darknet markets (DNMs).', calls,
+    ) == []
+    assert contract.answer_issues("The source recommends FabricatedCrawler-only tools.", calls) == [
+        "answer:ungrounded_online_claims=FabricatedCrawler-only"
+    ]
+
+
 def test_task_contract_ignores_markdown_step_headings_as_entity_claims() -> None:
     contract = TaskContract.from_prompt(
         "Inspect https://example.test and report the result."
@@ -3804,6 +3887,17 @@ def test_task_contract_rejects_mistyped_online_source_url() -> None:
         "answer:ungrounded_online_urls="
         "https://thunderbit.com/pl/blog/open-source-firercrawl-alternatives"
     ]
+
+
+@pytest.mark.parametrize("url,expected", [
+    ("https://example.test/source", []),
+    ("https://example.test/sourc", ["answer:ungrounded_online_urls=https://example.test/sourc"]),
+])
+def test_online_url_in_code_formatting_preserves_exact_identity(url, expected) -> None:
+    contract = TaskContract.from_prompt("Inspect https://example.test/source and report the result.")
+    calls = [{"tool": "browser_snapshot", "arguments": {}, "status": "succeeded",
+              "result_excerpt": "Page URL: https://example.test/source\nThe source has no ranking."}]
+    assert contract.answer_issues(f"The source is `{url}`.", calls) == expected
 
 
 def test_task_contract_routes_public_social_profile_lookup_to_web() -> None:

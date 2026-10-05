@@ -165,6 +165,7 @@ class LLM:
         temperature: float | None = None,
         response_format: dict[str, Any] | None = None,
         artifact_generation: bool = False,
+        request_timeout_seconds: float | None = None,
     ) -> LLMResponse:
         """Return prose and native tool calls without discarding either.
 
@@ -198,7 +199,7 @@ class LLM:
                 "repeat_penalty": tuning.repeat_penalty,
             },
             "messages": normalized,
-            "max_tokens": max_tokens or int(os.getenv("V_CORE_MAX_TOKENS", "512")),
+            "max_tokens": max_tokens or int(os.getenv("V_CORE_MAX_TOKENS", "1024")),
         }
         tool_names = {
             str(item.get("function", {}).get("name", ""))
@@ -226,6 +227,13 @@ class LLM:
             request["tools"] = tools
             request["tool_choice"] = tool_choice
             request["parallel_tool_calls"] = False
+
+        if request_timeout_seconds is not None:
+            request["timeout"] = max(
+                float(os.getenv("V_CORE_TIMEOUT", "300")),
+                float(request.get("timeout", 0)),
+                float(request_timeout_seconds),
+            )
 
         if controller is not None:
             controller.adapt_request(request, explicit_temperature=temperature is not None)
@@ -379,7 +387,7 @@ class LLM:
 
         response = await self.respond(
             messages=messages,
-            max_tokens=max_tokens or int(os.getenv("V_CORE_MAX_TOKENS", "512")),
+            max_tokens=max_tokens or int(os.getenv("V_CORE_MAX_TOKENS", "1024")),
             temperature=temperature,
             response_format=response_format,
         )
@@ -417,7 +425,7 @@ class LLM:
                 "repeat_penalty": tuning.repeat_penalty,
             },
             messages=messages,
-            max_tokens=max_tokens or int(os.getenv("V_CORE_MAX_TOKENS", "512")),
+            max_tokens=max_tokens or int(os.getenv("V_CORE_MAX_TOKENS", "1024")),
             stream=True,
         )
 

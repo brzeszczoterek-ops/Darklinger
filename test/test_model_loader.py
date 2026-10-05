@@ -131,7 +131,7 @@ def qualification_card(
         model_fingerprint=model_file_fingerprint(model),
         profile_fingerprint=model_profile_fingerprint(profile),
         qualified_at="2026-08-31T12:00:00Z",
-        harness_version=8,
+        harness_version=9,
         capabilities=capabilities,
         probes=(
             QualificationProbeResult(
@@ -297,6 +297,56 @@ def test_loader_state_persists_qualified_three_model_routing_pool(
         LoaderState(routing_strategy="model-decides")
 
 
+@pytest.mark.asyncio
+async def test_qualification_retries_truncation_before_scoring() -> None:
+    requests = []
+
+    class TruncatedLLM:
+        async def respond(self, **kwargs):
+            requests.append(kwargs)
+            if len(requests) == 1:
+                return LLMResponse(content="", finish_reason="length")
+            return LLMResponse(content="DARKLINGER_READY_731", finish_reason="stop")
+
+    result = await ModelQualifier(TruncatedLLM())._exact_instruction_probe()
+
+    assert result.score == 100
+    assert [request["max_tokens"] for request in requests] == [32, 2_048]
+    assert requests[0]["messages"] == requests[1]["messages"]
+
+
+@pytest.mark.asyncio
+async def test_qualification_does_not_retry_complete_wrong_answer() -> None:
+    requests = []
+
+    class WrongLLM:
+        async def respond(self, **kwargs):
+            requests.append(kwargs)
+            return LLMResponse(content="wrong", finish_reason="stop")
+
+    result = await ModelQualifier(WrongLLM())._exact_instruction_probe()
+
+    assert result.score == 0
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_qualification_truncation_retry_is_bounded() -> None:
+    requests = []
+
+    class TruncatedLLM:
+        async def respond(self, **kwargs):
+            requests.append(kwargs)
+            return LLMResponse(content="", finish_reason="length")
+
+    qualifier = ModelQualifier(TruncatedLLM())
+    qualifier._reasoning_enabled = True
+    result = await qualifier._exact_instruction_probe()
+
+    assert result.score == 0
+    assert [request["max_tokens"] for request in requests] == [1_024, 4_096]
+
+
 def test_older_qualification_card_remains_readable_but_stale(
     tmp_path: Path,
 ) -> None:
@@ -313,19 +363,22 @@ def test_older_qualification_card_remains_readable_but_stale(
     assert restored.score("execution_honesty") == 0
     assert restored.is_current(model, profile) is False
     assert restored.stale_reasons(model, profile) == (
-        "qualification_harness_changed:5->8",
+        "qualification_harness_changed:5->9",
     )
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reasoning", ["off", "on", "auto"])
 async def test_qualification_harness_scores_protocol_capabilities(
-    tmp_path: Path,
+    tmp_path: Path, reasoning: str,
 ) -> None:
     model = model_file(tmp_path / "qualified.gguf")
-    profile = profile_for(model)
+    profile = ModelProfile.from_dict({**profile_for(model).to_dict(), "reasoning": reasoning})
+    requests = []
 
     class ScriptedLLM:
         async def respond(self, **kwargs):
+            requests.append(kwargs)
             prompt = kwargs["messages"][-1]["content"]
             full_prompt = "\n".join(
                 str(message.get("content", ""))
@@ -430,6 +483,11 @@ async def test_qualification_harness_scores_protocol_capabilities(
 
     card = await ModelQualifier(ScriptedLLM()).qualify(profile)
 
+    assert len(requests) == 18
+    if reasoning in {"on", "auto"}:
+        assert all(request["max_tokens"] >= 1_024 for request in requests)
+    else:
+        assert requests[0]["max_tokens"] == 32
     assert card.overall_score == 99
     assert card.score("tool_calling") == 94
     assert card.score("research") == 94
@@ -946,7 +1004,7 @@ def test_startup_menu_warns_when_enabled_routing_pool_is_stale(
     assert action == "start"
     assert any("0/1 current; 1/3 selected" in line for line in output)
     assert any("automatic model routing is not fully available" in line for line in output)
-    assert any("qualification_harness_changed:7->8" in line for line in output)
+    assert any("qualification_harness_changed:7->9" in line for line in output)
 
 
 def test_startup_menu_exposes_manual_hierarchy_only_to_full() -> None:
@@ -1382,7 +1440,7 @@ async def test_routed_runtime_records_requested_phase_when_all_cards_are_stale(
     assert result.requested_task_kind == "research"
     assert result.configured_candidates == 1
     assert result.eligible_candidates == 0
-    assert "qualification_harness_changed:7->8" in result.failures[0]
+    assert "qualification_harness_changed:7->9" in result.failures[0]
     assert len(warnings) == 1
     event = json.loads((root / "routing.jsonl").read_text(encoding="utf-8"))
     assert event["task_kind"] == "research"

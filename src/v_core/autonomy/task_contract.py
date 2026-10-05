@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from .photo_context import relevant_image_evidence
+from ..perception.evidence import perception_inputs, missing_media
+
 from dataclasses import asdict, dataclass, replace
 import json
 import re
@@ -13,6 +16,11 @@ from ..capabilities.web_target import (
     requests_web_access,
 )
 from ..tool_recovery import capabilities_for_tool, normalize_capabilities
+from .research_facts import (
+    CURRENT_RELEASE, OFFICIAL, subjects_for_request, fact_missing,
+    answer_fact_issues, catalog_target,
+    publisher,
+)
 
 
 _ONLINE_ACTION = re.compile(
@@ -164,8 +172,9 @@ _USE_CREATED_TOOL = re.compile(
     r"(?:result|results|output|demo)|"
     r"(?:pokaz|pokaż|przedstaw|podaj)\s+(?:mi\s+)?(?:jego\s+|jej\s+)?"
     r"(?:rezultat\w*|wynik\w*|dzialani\w*|działani\w*)|"
-    r"a\s+nast[eę]pnie\s+(?:wykonaj|uruchom)|"
-    r"potem\s+(?:wykonaj|uruchom)|(?:wykonaj|uruchom)\s+(?:go|je))\b",
+    r"a\s+nast[eę]pnie\s+(?:rzeczywi[sś]cie\s+)?(?:wykonaj|uruchom)|"
+    r"potem\s+(?:rzeczywi[sś]cie\s+)?(?:wykonaj|uruchom)|"
+    r"(?:wykonaj|uruchom)\s+(?:go|je))\b",
     re.IGNORECASE,
 )
 _DISABLE_WEB = re.compile(
@@ -434,9 +443,20 @@ _GROUNDING_ENTITY_STOPWORDS = {
     "english", "finding", "findings", "lastly", "next", "okay", "open",
     "darklinger", "please", "response", "result", "results", "second",
     "section", "sections", "source", "sources", "still", "the", "therefore",
-    "this", "third", "verified", "would",
+    "this", "these", "third", "verified", "would", "project", "esr",
+    # Report vocabulary is not a named online entity, including when a model
+    # capitalizes or emphasizes a label. Keep distinctive names checked even
+    # when they share an emphasized phrase with these descriptive words.
+    "activity", "active", "base", "count", "counts", "coverage", "current", "stable",
+    "distinction", "dynamics", "estimated", "extension", "gaps", "goods", "limitations",
+    "logistics", "longevity", "major", "market", "markets", "measures",
+    "membership", "missing", "note", "overview", "platforms", "pressure",
+    "protocols", "security", "seizures", "specific", "specifics", "statistics",
+    "technology", "trade", "trading", "transaction", "unresolved", "usage",
+    "user", "variety", "vendor", "version", "volume", "what", "while",
+    "dnm", "dnms",  # generic abbreviation for darknet markets
 }
-_HTTP_URL = re.compile(r"https?://[^\s<>\[\](){}\"']+", re.IGNORECASE)
+_HTTP_URL = re.compile(r"https?://[^\s<>\[\](){}\"'`]+", re.IGNORECASE)
 _GITHUB_REPOSITORY_IDENTIFIER = re.compile(
     r"(?<![A-Za-z0-9._/-])"
     r"([A-Za-z0-9](?:[A-Za-z0-9._-]{0,38})/"
@@ -552,7 +572,7 @@ def _grounding_entity_is_present(entity: str, grounding_text: str) -> bool:
         singular = normalized[:-1]
         if singular in grounding_text:
             return True
-    for suffix in ("-based", "_based"):
+    for suffix in ("-based", "_based", "-only"):
         if normalized.endswith(suffix):
             stem = normalized[: -len(suffix)].strip("-_")
             # This permits ``Python-based`` when the source says ``Python`` or
@@ -757,6 +777,8 @@ class TaskContract:
     minimum_detail_sources: int = 0
     requires_file_read: bool = False
     required_read_paths: tuple[str, ...] = ()
+    required_media_paths: tuple[str, ...] = ()
+    required_mutation_paths: tuple[str, ...] = ()
     requires_file_mutation: bool = False
     requires_command_execution: bool = False
     requires_evidence_report: bool = False
@@ -775,6 +797,10 @@ class TaskContract:
     required_public_fields: tuple[str, ...] = ()
     required_public_subject: str = ""
     required_research_facets: tuple[str, ...] = ()
+    requires_official_sources: bool = False
+    requires_current_release: bool = False
+    required_research_subjects: tuple[str, ...] = ()
+    official_source_targets: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not 0 <= self.tor_inventory_max_pages <= 20:
@@ -817,11 +843,13 @@ class TaskContract:
     def without_mutations(self) -> "TaskContract":
         """An explicit read-only boundary overrides inferred builder work."""
         return replace(
-            self, requires_file_mutation=False, requires_command_execution=False,
+            self, requires_file_mutation=False, required_mutation_paths=(), requires_command_execution=False,
             requires_created_tool=False, requires_created_tool_execution=False,
             requires_created_skill=False, requires_created_artifact=False,
             allows_artifact_fallback=False,
-            required_tools=(), required_capabilities=(),
+            required_tools=tuple(name for name in self.required_tools if name in {
+                "image_analyze", "document_read", "audio_transcribe", "audio_analyze", "browser_vision", "perception_status"
+            }), required_capabilities=(),
         )
 
     @staticmethod
@@ -878,6 +906,7 @@ class TaskContract:
                     "full_tor_inventory",
                     "full_tor_browser_inventory",
                     "full_tor_browser_close",
+                    "browser_vision",
                 }
             ),
             required_capabilities=tuple(
@@ -888,6 +917,10 @@ class TaskContract:
             required_public_fields=(),
             required_public_subject="",
             required_research_facets=(),
+            requires_official_sources=False,
+            requires_current_release=False,
+            required_research_subjects=(),
+            official_source_targets=(),
         )
 
     @staticmethod
@@ -1210,9 +1243,14 @@ class TaskContract:
                 else 1 if distinct_detail_page else 0
             ),
             requires_file_read=file_read,
+            required_media_paths=perception_inputs(prompt) if not file_mutation else (),
             requires_file_mutation=file_mutation,
             requires_command_execution=command_execution,
             requires_evidence_report=evidence_report,
+            requires_official_sources=bool(online and evidence_report and OFFICIAL.search(prompt)),
+            requires_current_release=bool(online and evidence_report and CURRENT_RELEASE.search(prompt)),
+            required_research_subjects=(subjects_for_request(prompt) if online and evidence_report and (OFFICIAL.search(prompt) or CURRENT_RELEASE.search(prompt)) else ()),
+            official_source_targets=(tuple(s + "|" + p.current_url for s in subjects_for_request(prompt) if (p := publisher(s, prompt))) if online and evidence_report and (OFFICIAL.search(prompt) or CURRENT_RELEASE.search(prompt)) else ()),
             requires_first_heading=file_read and bool(_FIRST_HEADING.search(prompt)),
             requires_created_tool=creates_tool,
             requires_created_tool_execution=(
@@ -1247,7 +1285,9 @@ class TaskContract:
                 ),
             )
             if tor_requested
-            else (),
+            else ("browser_vision",) if online and re.search(
+                r"\b(?:visually|visual analysis|page layout|wizual\w*|wygl[aą]d\w*)\b", prompt, re.I
+            ) else (),
             required_capabilities=(
                 (
                     "network.tor.browser"
@@ -1282,7 +1322,11 @@ class TaskContract:
 
         source = values if isinstance(values, dict) else {}
         tuple_fields = {
+            "required_research_subjects",
+            "official_source_targets",
             "required_read_paths",
+            "required_media_paths",
+            "required_mutation_paths",
             "required_tools",
             "required_capabilities",
             "required_public_fields",
@@ -1345,6 +1389,10 @@ class TaskContract:
         )
         return cls(
             **flags,
+            required_mutation_paths=tuple(dict.fromkeys(
+                p for p in source.get("required_mutation_paths", []) if isinstance(p, str) and p
+            )) if isinstance(source.get("required_mutation_paths", []), (list, tuple)) else (),
+            required_media_paths=tuple(dict.fromkeys(p for p in source.get("required_media_paths", []) if isinstance(p, str) and p)) if isinstance(source.get("required_media_paths", []), (list, tuple)) else (),
             required_read_paths=tuple(dict.fromkeys(
                 p for p in source.get("required_read_paths", []) if isinstance(p, str) and p
             )) if isinstance(source.get("required_read_paths", []), (list, tuple)) else (),
@@ -1367,13 +1415,19 @@ class TaskContract:
                 source.get("required_public_subject", "")
             ).strip()[:160],
             required_research_facets=required_research_facets,
+            required_research_subjects=tuple(dict.fromkeys(s for s in source.get('required_research_subjects', []) if isinstance(s,str) and s)) if isinstance(source.get('required_research_subjects', []),(list,tuple)) else (),
+            official_source_targets=tuple(dict.fromkeys(s for s in source.get('official_source_targets', []) if isinstance(s,str) and s)) if isinstance(source.get('official_source_targets', []),(list,tuple)) else (),
         )
 
     def merged(self, other: "TaskContract") -> "TaskContract":
         """Return the union of two independently detected requirements."""
 
         tuple_fields = {
+            "required_research_subjects",
+            "official_source_targets",
             "required_read_paths",
+            "required_media_paths",
+            "required_mutation_paths",
             "required_tools",
             "required_capabilities",
             "required_public_fields",
@@ -1412,6 +1466,8 @@ class TaskContract:
         return type(self)(
             **flags,
             required_read_paths=tuple(dict.fromkeys((*self.required_read_paths, *other.required_read_paths))),
+            required_media_paths=tuple(dict.fromkeys((*self.required_media_paths, *other.required_media_paths))),
+            required_mutation_paths=tuple(dict.fromkeys((*self.required_mutation_paths, *other.required_mutation_paths))),
             minimum_detail_sources=max(
                 self.minimum_detail_sources,
                 other.minimum_detail_sources,
@@ -1445,6 +1501,8 @@ class TaskContract:
                 self.required_public_subject or other.required_public_subject
             ),
             required_research_facets=required_research_facets,
+            required_research_subjects=tuple(dict.fromkeys((*self.required_research_subjects, *other.required_research_subjects))),
+            official_source_targets=tuple(dict.fromkeys((*self.official_source_targets, *other.official_source_targets))),
         )
 
     def with_required_tools(self, names: list[str] | tuple[str, ...]) -> "TaskContract":
@@ -1477,10 +1535,37 @@ class TaskContract:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+    def with_research_sources(self, prompt: str) -> TaskContract:
+        """Apply owner source constraints after semantic routing has merged."""
+        if not (self.requires_browser_navigation and self.requires_evidence_report):
+            return self
+        official = bool(OFFICIAL.search(prompt))
+        current = bool(CURRENT_RELEASE.search(prompt))
+        if not (official or current):
+            return self
+        subjects = subjects_for_request(prompt)
+        return replace(self, requires_official_sources=official,
+                       requires_current_release=current,
+                       required_research_subjects=subjects,
+                       official_source_targets=tuple(s+'|'+p.current_url for s in subjects if (p := publisher(s,prompt))))
+
     def unmet(self, calls: list[dict[str, Any]]) -> list[str]:
         succeeded = [call for call in calls if call.get("status", "succeeded") == "succeeded"]
         names = [str(call.get("tool", "")) for call in succeeded]
         missing: list[str] = []
+        source_request = '\n'.join(s + ' official source ' + u for item in self.official_source_targets if '|' in item for s,u in [item.split('|',1)])
+        missing.extend(fact_missing(
+            succeeded, self.required_research_subjects,
+            official=self.requires_official_sources, current=self.requires_current_release,
+            request=source_request,
+        ))
+
+        def bound_publisher_read(call: dict) -> bool:
+            arguments = call.get("arguments", {})
+            return bool(call.get("binding_source") == "runtime_publisher_catalog"
+                        and isinstance(arguments, dict)
+                        and catalog_target(self.required_research_subjects, str(arguments.get("url", "")), source_request)
+                        and call.get("research_source"))
         tool_builders = {
             "learning_create_tool",
             "learning_create_snapshot_extractor",
@@ -1542,7 +1627,7 @@ class TaskContract:
                 if not self.requires_web_discovery:
                     verified_web_read = True
                     break
-                if any(
+                if bound_publisher_read(call) or any(
                     prior.get("tool") == "web_search"
                     and search_index < read_index
                     and _snapshot_mentions_url(
@@ -1686,7 +1771,7 @@ class TaskContract:
                             or bool(_github_repository_identifier(url))
                         )
                         and _web_read_has_substantive_content(call)
-                        and any(
+                        and (bound_publisher_read(call) or any(
                             index < read_index
                             and prior.get("tool") == "web_search"
                             and _snapshot_mentions_url(
@@ -1694,7 +1779,7 @@ class TaskContract:
                                 url,
                             )
                             for index, prior in enumerate(succeeded)
-                        )
+                        ))
                     ):
                         verified_sources.add(url.rstrip("/"))
                 if len(verified_sources) < self.minimum_detail_sources:
@@ -1703,9 +1788,10 @@ class TaskContract:
                         f"{len(verified_sources)}/{self.minimum_detail_sources}"
                     )
 
+        missing.extend(missing_media(self.required_media_paths, succeeded))
         if self.requires_file_read and not any(
             name in {"read_file", "cat"} for name in names
-        ):
+        ) and not (self.required_media_paths and not missing_media(self.required_media_paths, succeeded)):
             missing.append("read_file")
 
         for path in self.required_read_paths:
@@ -1716,6 +1802,15 @@ class TaskContract:
                 for call in succeeded
             ):
                 missing.append("read_file:" + path)
+
+        for path in self.required_mutation_paths:
+            if not any(
+                call.get("tool") in {"write_file", "edit_file", "move_file", "create_directory"}
+                and isinstance(call.get("arguments"), dict)
+                and path in {call["arguments"].get("path"), call["arguments"].get("destination")}
+                for call in succeeded
+            ):
+                missing.append("filesystem_mutation:" + path)
 
         if self.requires_file_mutation and not any(
             name in {
@@ -1787,6 +1882,19 @@ class TaskContract:
                     missing.append("full_tor_fetch:candidate_verification")
                 break
         for required_tool in self.required_tools:
+            if required_tool == "browser_vision":
+                observed_pixels = False
+                for call in succeeded:
+                    if call.get("tool") != required_tool:
+                        continue
+                    try:
+                        receipt = json.loads(call.get("result_excerpt", ""))
+                    except (ValueError, TypeError):
+                        continue
+                    if isinstance(receipt, dict) and receipt.get("visual_analysis_performed") is True and receipt.get("page_url"):
+                        observed_pixels = True
+                if not observed_pixels:
+                    missing.append("browser_vision:pixels")
             required_tool_capabilities = set(capabilities_for_tool(required_tool))
             observed_capabilities = {
                 str(capability)
@@ -1929,9 +2037,14 @@ class TaskContract:
         ):
             missing.append("browser_evidence:research_purchase_source")
         item_labels = _research_item_labels(research_evidence)
+        release_rows = self.requires_current_release and bool(self.required_research_subjects) and not fact_missing(
+            succeeded, self.required_research_subjects, official=self.requires_official_sources,
+            current=True, request=source_request,
+        )
         if (
             "item_list" in self.required_research_facets
             and len(item_labels) < 2
+            and not release_rows
         ):
             missing.append("browser_evidence:research_item_list")
         description_blocks = len(
@@ -1944,11 +2057,12 @@ class TaskContract:
         if (
             "item_descriptions" in self.required_research_facets
             and (len(item_labels) < 2 or description_blocks < 2)
+            and not release_rows
         ):
             missing.append("browser_evidence:research_item_descriptions")
         if (
             "images" in self.required_research_facets
-            and not _IMAGE_EVIDENCE.search(research_evidence)
+            and not relevant_image_evidence(research_evidence)
         ):
             missing.append("browser_evidence:research_images")
         return missing
@@ -1964,6 +2078,14 @@ class TaskContract:
 
         if not self.requires_evidence_report:
             return []
+
+        fact_issues = answer_fact_issues(
+            answer, calls, self.required_research_subjects,
+            official=self.requires_official_sources, current=self.requires_current_release,
+            request=request,
+        ) if self.requires_browser_navigation and self.required_research_subjects else []
+        if fact_issues:
+            return fact_issues
         observations = [
             str(call.get("result_excerpt", ""))
             for call in calls
@@ -1984,6 +2106,28 @@ class TaskContract:
             }
             and call.get("result_excerpt")
         ]
+        # Sensory receipts are observations too. Count the processor's actual
+        # success flags, never an unavailable tool's name or model prose alone.
+        for call in calls:
+            if call.get("status") != "succeeded":
+                continue
+            tool = call.get("tool")
+            if tool not in {"document_read", "image_analyze", "browser_vision", "audio_transcribe", "audio_analyze"}:
+                continue
+            try:
+                record = json.loads(call.get("result_excerpt", ""))
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(record, dict):
+                continue
+            observed = (
+                tool == "document_read" and record.get("status") == "read"
+                or tool in {"document_read", "image_analyze", "browser_vision"} and record.get("visual_analysis_performed") is True
+                or tool == "audio_transcribe" and record.get("transcription_performed") is True
+                or tool == "audio_analyze" and record.get("sound_analysis_performed") is True
+            )
+            if observed:
+                observations.append(str(call["result_excerpt"]))
         if not observations:
             return ["answer:evidence_observation_missing"]
 
@@ -2084,15 +2228,10 @@ class TaskContract:
                         flags=re.IGNORECASE,
                     )
                 )
-                # Markdown emphasis often wraps a whole feature label such as
-                # "Chrome Extension version". If one distinctive token grounds
-                # that label, its generic descriptive words are not separate
-                # product claims.
-                phrase_is_grounded = structural_label or any(
-                    _grounding_entity_is_present(token, grounding_text)
-                    for token in phrase_tokens
-                )
-                if phrase_is_grounded:
+                # A sourced name in a feature label must not shield a second,
+                # invented name in the same emphasis. Generic label vocabulary
+                # is filtered separately above.
+                if structural_label:
                     grounded_highlight_spans.append(highlighted.span())
                 else:
                     claimed_entities.update(phrase_tokens)
@@ -2161,6 +2300,14 @@ class TaskContract:
                 re.MULTILINE,
             )
         ]
+        if self.requires_current_release:
+            # Validated release-table rows are per-project report entries too.
+            # Numeric/source checks above must pass before this structural step.
+            for subject in self.required_research_subjects:
+                row = next((line for line in answer.splitlines()
+                            if '|' in line and re.search(r'\|\s*'+re.escape(subject)+r'\s*\|',line,re.I)), '')
+                if row:
+                    report_entries.append(row)
         if (
             "item_list" in self.required_research_facets
             and len(report_entries) < 2

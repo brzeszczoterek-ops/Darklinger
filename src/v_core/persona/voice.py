@@ -71,15 +71,6 @@ _CONTEMPT_WORD = re.compile(
     r"worthless)\b",
     re.IGNORECASE,
 )
-_DECISIVE_CONTEMPT = re.compile(
-    r"\b(?:fluff|garbage|junk|low-value|scrap|shady|trash|useless|"
-    r"worthless)\b",
-    re.IGNORECASE,
-)
-_NATURAL_PROFANITY = re.compile(
-    r"\b(?:bullshit|crap|damn|fuck(?:ed|ing)?|hell|shit(?:ty)?)\b",
-    re.IGNORECASE,
-)
 _DIRECT_REFUSAL = re.compile(
     r"(?:^|[.!?]\s+)(?:"
     r"i\s+(?:can(?:not|'t)|could(?:\s+not|n't)|won't|will\s+not|"
@@ -152,20 +143,17 @@ def looks_bland_clarification(text: str) -> bool:
 
 
 def looks_sanitized_contempt(text: str) -> bool:
-    """Detect a strong negative verdict flattened into sanitized report prose.
+    """Detect a negative verdict delivered through generic service prose.
 
-    This is deliberately narrow. Ordinary technical answers do not need profanity,
-    but a draft that repeatedly calls material junk while sounding scrubbed clean is
-    exactly the kind of identity drift V's voice contract rejects.
+    Sharp judgment without a swear is still V's voice. Conversely, adding a
+    swear cannot redeem corporate boilerplate. Preserve natural wording and
+    request a rewrite only for independently recognizable assistant phrasing.
     """
 
     normalized = " ".join(text.strip().split())
-    contempt_hits = len(_CONTEMPT_WORD.findall(normalized))
-    has_unsanitized_reaction = _NATURAL_PROFANITY.search(normalized) is not None
-    has_decisive_contempt = _DECISIVE_CONTEMPT.search(normalized) is not None
-    return (
-        not has_unsanitized_reaction
-        and (has_decisive_contempt or contempt_hits >= 2)
+    return bool(
+        _CONTEMPT_WORD.search(normalized)
+        and looks_generic_assistant_voice(normalized)
     )
 
 

@@ -124,8 +124,6 @@ class Budget:
 
     @property
     def hard_reason(self) -> str:
-        if self.remaining_seconds <= 0:
-            return "time_budget"
         if self.attempts >= TOTAL_ATTEMPT_LIMIT:
             return "attempt_budget"
         return ""

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 import json
 import re
 from typing import Any
@@ -309,6 +310,10 @@ Rules:
   independent of continue_previous: discussing or asking about an earlier task
   sets references_previous=true and continue_previous=false; ordering DARKLINGER to
   resume it sets both true. Do not invent what the reference means.
+- Returning to a discussion is not resuming execution. "Back to subscriptions:
+  do you still think that idea makes sense? No tools." and "Wracając do abonamentu:
+  co o tym teraz myślisz? Bez narzędzi." ask for an opinion: action_requested=false,
+  continue_previous=false, references_previous=true, capabilities=[].
 - When continue_previous is true, capabilities describe only new work explicitly
   named in the current message. Never copy capabilities from an earlier task.
   In particular, a continuation is not runtime_review merely because the previous
@@ -407,6 +412,9 @@ Rules:
   requested subject. That is semantic coverage, not a new task. Never substitute a
   different person, organization, account, system, or real-world target. Return an
   empty string when no web discovery is needed.
+  For a current-information request, use the runtime date supplied below. Do not
+  add obsolete years from training knowledge. Preserve a past period explicitly
+  requested by the owner. Write ordinary Unicode text, not literal escape syntax.
 - language_scope describes only an explicit output-language instruction in the
   current message. Use turn for this answer/now/temporarily, persistent for
   from-now-on/always/default/until-changed, reset for a request to return to
@@ -1241,6 +1249,35 @@ class MultilingualIntentRouter:
             )
         )
 
+    @staticmethod
+    def _ground_opinion_reference(
+        intent: SemanticIntent | None, prompt: str,
+    ) -> SemanticIntent | None:
+        """Keep explicit no-tool opinion questions out of execution resumption.
+
+        A classifier may confuse returning to a subject with resuming a job.
+        Limit this correction to clear discussion-only requests; commands and
+        any requested capability retain their execution route.
+        """
+        if intent is None or not intent.continue_previous or intent.capabilities:
+            return intent
+        if not re.search(r"\b(?:no tools|without tools|bez narzędzi)\b", prompt, re.I):
+            return intent
+        if re.search(
+            r"\b(?:resume|retry|continue|proceed|run|execute|kontynuuj|ponów|"
+            r"wznów|uruchom|wykonaj)\b", prompt, re.I,
+        ):
+            return intent
+        if not re.search(
+            r"\b(?:what do you (?:still )?think|do you (?:still )?think|"
+            r"co (?:o tym|teraz|sądzisz)|jak (?:ty )?to widzisz)\b", prompt, re.I,
+        ):
+            return intent
+        return replace(
+            intent, action_requested=False, continue_previous=False,
+            references_previous=True, requires_report=False,
+        )
+
     async def extract_tor_inventory_limits(self, prompt: str) -> tuple[int, int] | None:
         from ..model_loader.outcome_runtime import auxiliary_inference
         with auxiliary_inference():
@@ -1269,7 +1306,7 @@ class MultilingualIntentRouter:
                     ),
                 },
             ],
-            max_tokens=96,
+            max_tokens=512,
             temperature=0.0,
             response_format=_TOR_INVENTORY_LIMIT_RESPONSE_FORMAT,
         )
@@ -1306,6 +1343,28 @@ class MultilingualIntentRouter:
         with auxiliary_inference():
             return await self._classify(prompt, previous_context=previous_context)
 
+    async def _ask_classification(
+        self, messages: list[dict[str, str]], *, retry: bool = False,
+    ) -> str:
+        from ..llm.llm import IncompleteGenerationError
+
+        # Reasoning shares the provider output budget with the JSON result.
+        # Discard an incomplete draft and retry the same request once with more
+        # room. Invalid-JSON repair already uses the larger budget and remains
+        # bounded; an exhausted second request must never authorize execution.
+        budgets = (4096,) if retry else (2048, 4096)
+        for index, budget in enumerate(budgets):
+            try:
+                return await self.llm.ask(
+                    messages=messages, max_tokens=budget, temperature=0.0,
+                    response_format=_INTENT_RESPONSE_FORMAT,
+                )
+            except IncompleteGenerationError:
+                if index == len(budgets) - 1:
+                    self.last_failure_reason = "output_token_limit"
+                    raise
+        raise AssertionError("unreachable classification retry")
+
     async def _classify(
         self,
         prompt: str,
@@ -1327,7 +1386,10 @@ class MultilingualIntentRouter:
             default=str,
         )
         messages = [
-            {"role": "system", "content": _INTENT_SYSTEM_PROMPT},
+            {"role": "system", "content": (
+                _INTENT_SYSTEM_PROMPT
+                + f"\nCurrent runtime date (UTC): {datetime.now(timezone.utc).date().isoformat()}."
+            )},
             {
                 "role": "user",
                 "content": (
@@ -1336,12 +1398,7 @@ class MultilingualIntentRouter:
                 ),
             },
         ]
-        response = await self.llm.ask(
-            messages=messages,
-            max_tokens=384,
-            temperature=0.0,
-            response_format=_INTENT_RESPONSE_FORMAT,
-        )
+        response = await self._ask_classification(messages)
         self.last_response = response
         intent = self._ground_retain_memory(
             self._ground_public_fields(
@@ -1359,6 +1416,10 @@ class MultilingualIntentRouter:
             ),
             prompt,
         )
+        grounded_intent = self._ground_opinion_reference(intent, prompt)
+        if grounded_intent is not intent:
+            self.last_sanitization_reason = "conversation_opinion_not_execution"
+        intent = grounded_intent
         if self._usable(intent, prompt):
             return intent
         if self._has_current_message_grounding_failure(intent, prompt):
@@ -1373,7 +1434,7 @@ class MultilingualIntentRouter:
         # its template ignores response_format. Retry once in a tiny correction
         # turn. The runtime continues to own the schema and treats a second
         # malformed response as a visible classification failure.
-        retry = await self.llm.ask(
+        retry = await self._ask_classification(
             messages=[
                 *messages,
                 {"role": "assistant", "content": response[:2_000]},
@@ -1389,9 +1450,7 @@ class MultilingualIntentRouter:
                     ),
                 },
             ],
-            max_tokens=384,
-            temperature=0.0,
-            response_format=_INTENT_RESPONSE_FORMAT,
+            retry=True,
         )
         self.last_response = retry
         retried_intent = self._ground_retain_memory(
@@ -1410,6 +1469,10 @@ class MultilingualIntentRouter:
             ),
             prompt,
         )
+        grounded_intent = self._ground_opinion_reference(retried_intent, prompt)
+        if grounded_intent is not retried_intent:
+            self.last_sanitization_reason = "conversation_opinion_not_execution"
+        retried_intent = grounded_intent
         if self._usable(retried_intent, prompt):
             return retried_intent
         if self._has_current_message_grounding_failure(retried_intent, prompt):

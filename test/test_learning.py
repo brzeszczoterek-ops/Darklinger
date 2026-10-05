@@ -331,29 +331,14 @@ def test_filesystem_arguments_are_owned_by_runtime_workspace(tmp_path: Path) -> 
     tools = MCPTools.__new__(MCPTools)
     tools.workspace = (tmp_path / "workspace").resolve()
 
-    first_guess = tools.normalize_arguments(
-        "create_directory",
-        {"path": "/home/boss/cebula_info"},
-    )
-    second_guess = tools.normalize_arguments(
-        "create_directory",
-        {"path": "/home/Vi/Desktop/DARKLINGER-Workspace/cebula_info"},
-    )
+    from v_core.mcp_tools import FilesystemScopeDenied
+    for path in ("/home/boss/cebula_info", "/home/Vi/Desktop/DARKLINGER-Workspace/cebula_info", "../../outside.md"):
+        with pytest.raises(FilesystemScopeDenied):
+            tools.normalize_arguments("write_file", {"path": path, "content": "blocked"})
     relative_report = tools.normalize_arguments(
-        "write_file",
-        {"path": "reports/cebula.md", "content": "verified"},
+        "write_file", {"path": "reports/cebula.md", "content": "verified"},
     )
-    traversal = tools.normalize_arguments(
-        "write_file",
-        {"path": "../../outside.md", "content": "blocked"},
-    )
-
-    assert first_guess["path"] == str(tools.workspace / "cebula_info")
-    assert second_guess["path"] == str(tools.workspace / "cebula_info")
-    assert relative_report["path"] == str(
-        tools.workspace / "reports" / "cebula.md"
-    )
-    assert traversal["path"] == str(tools.workspace / "outside.md")
+    assert relative_report["path"] == str(tools.workspace / "reports" / "cebula.md")
 
 
 def test_read_only_project_review_uses_project_root_without_exposing_writes(
@@ -379,7 +364,7 @@ def test_read_only_project_review_uses_project_root_without_exposing_writes(
     (tools.project_read_root / "src" / "v_core").mkdir(parents=True)
     (tools.project_read_root / "build" / "lib" / "v_core").mkdir(parents=True)
     shortened = tools.normalize_arguments("list_directory", {"path": "v_core"})
-    assert shortened["path"] == str(tools.project_read_root / "src" / "v_core")
+    assert shortened["path"] == str(tools.project_read_root / "v_core")
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .provenance import ground_derived
+
 from ..llm import LLM
 from ..utils import parse_llm_json
 from .models import (
@@ -135,16 +137,6 @@ Output ONLY JSON.
         except ValueError:
             kind = MemoryKind.LESSON
 
-        try:
-            source = MemorySource(
-                data.get(
-                    "source",
-                    MemorySource.SELF_GENERATED.value,
-                )
-            )
-        except ValueError:
-            source = MemorySource.SELF_GENERATED
-
         confidence = float(
             data.get(
                 "confidence",
@@ -160,7 +152,7 @@ Output ONLY JSON.
             )
         )
 
-        return SummaryEntry(
+        entry = SummaryEntry(
             summary=data.get("summary", ""),
             lessons=data.get("lessons", []),
             confidence=confidence,
@@ -169,5 +161,8 @@ Output ONLY JSON.
                 "low",
             ),
             kind=kind,
-            source=source,
+            source=MemorySource.SELF_GENERATED,
         )
+
+        ground_derived(entry, experiences)
+        return entry

@@ -11,6 +11,7 @@ import signal
 import time
 
 from .models import NetworkMode, SandboxResult, SandboxSpec
+from ..tool_supervision import execution_signals, report_progress
 
 
 class SandboxUnavailable(RuntimeError):
@@ -163,6 +164,8 @@ class BubblewrapBackend:
             pass_fds=((seccomp_fd,) if seccomp_fd is not None else ()),
         )
 
+        supervised = execution_signals.get() is not None
+        report_progress("sandbox_running", pid=process.pid, process_alive=True)
         timed_out = False
         output_limited = False
         workspace_limited = False
@@ -177,7 +180,7 @@ class BubblewrapBackend:
                         workspace,
                         spec.limits.max_workspace_bytes,
                     ),
-                    timeout=spec.limits.timeout_seconds,
+                    timeout=None if supervised else spec.limits.timeout_seconds,
                 )
             except TimeoutError:
                 timed_out = True
@@ -194,6 +197,9 @@ class BubblewrapBackend:
         except asyncio.CancelledError:
             await self._kill(process)
             raise
+        finally:
+            report_progress("process_stopped", pid=process.pid,
+                            process_alive=process.returncode is None, returncode=process.returncode)
 
         limit = spec.limits.max_output_bytes
         return SandboxResult(
@@ -246,7 +252,7 @@ class BubblewrapBackend:
         argv = [
             str(self.resource_limiter),
             f"--as={limits.memory_mb * 1024 * 1024}",
-            f"--cpu={limits.cpu_seconds}",
+            *([] if execution_signals.get() else [f"--cpu={limits.cpu_seconds}"]),
             f"--fsize={limits.max_file_bytes}",
             f"--nofile={limits.max_open_files}",
             "--",
@@ -412,6 +418,7 @@ class BubblewrapBackend:
             while chunk := await stream.read(64 * 1024):
                 async with lock:
                     total += len(chunk)
+                    report_progress("sandbox_output", pid=process.pid, process_alive=True, bytes_received=total)
                     if total > maximum:
                         raise _OutputLimitExceeded
                 chunks.append(chunk)

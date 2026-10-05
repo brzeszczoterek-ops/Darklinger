@@ -46,7 +46,7 @@ preserving its own recognizable personality and judgment.
 
 ## Current scope and future direction
 
-DARKLINGER 3.0 is currently a single-user foundation centered on V. This version
+DARKLINGER is currently a single-user foundation centered on V. This version
 does not yet include a persona creator: V's identity, constitution, and voice
 are part of the framework. The immediate priority is to make V dependable for
 real work, persistent learning, tool use, and increasingly autonomous task
@@ -92,10 +92,24 @@ limitations.
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
+npx @playwright/mcp install-browser firefox
 cp .env.example .env
 # DARKLINGER can now discover and start a local GGUF model itself:
 darklinger-ui
 ```
+
+Browser tools use the Firefox build managed by the Node.js Playwright MCP
+server. Installing a system Firefox package, including Snap, does not install
+this automation build. The command above downloads the matching browser to
+Playwright's cache (`~/.cache/ms-playwright` on Linux).
+
+If a browser tool reports `Browser "firefox" is not installed` and names a
+missing `firefox-<revision>` executable, run
+`npx @playwright/mcp install-browser firefox` again. A Playwright MCP update may
+require a newer browser revision even when system Firefox and older cached
+automation builds are present. Use the Node.js MCP installation command for
+these tools; a separately installed Python Playwright package can require a
+different browser revision.
 
 `darklinger-ui` keeps model selection in the terminal and then opens the local
 command center at `http://127.0.0.1:8765/`. It streams V's visible answer,
@@ -388,6 +402,18 @@ Ubuntu policy. Isolation of generated code is still enforced inside Bubblewrap.
 Task artifacts are restricted to their authorized runtime workspace. The
 `client` profile requires a validated lesson and two owner-approved capabilities
 before persistent promotion, and applies a restricted generated-Python policy.
+Tool execution has runtime-owned monitoring. The UI shows tool state and allows
+explicit cancellation even while inference is busy or its model has stopped.
+A separate monitor thread records event-loop heartbeat and adapter signals;
+absence of progress is reported as uncertainty and never triggers a timed kill.
+`/jobs`, `/job ID`, and `/stop-job ID` work without inference.
+
+
+Supervised sandbox calls have no elapsed-time or CPU-time cutoff. Memory, output,
+disk and process protections remain. Creation retries still use verified progress,
+stagnation and attempt accounting. Other MCP calls remain in the task that owns
+their session; their pending state can be inspected through the panel.
+
 
 Inspect the learning store with:
 

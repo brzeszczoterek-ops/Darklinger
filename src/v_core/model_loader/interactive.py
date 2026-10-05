@@ -327,7 +327,11 @@ async def qualify_model_interactively(
     llm: Any | None = None
     try:
         llm = llm_factory()
-        card = await qualifier_factory(llm).qualify(profile)
+        qualifier = qualifier_factory(llm)
+        configure_preview = getattr(qualifier, "configure_preview", None)
+        if callable(configure_preview):
+            configure_preview(runtime_root, output=output)
+        card = await qualifier.qualify(profile)
     finally:
         if llm is not None:
             client = getattr(llm, "client", None)
