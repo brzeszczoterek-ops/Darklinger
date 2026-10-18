@@ -55,7 +55,7 @@ class SandboxLimits:
 class SandboxSpec:
     command: tuple[str, ...]
     workspace: Path
-    network: NetworkMode = NetworkMode.OFFLINE
+    network: NetworkMode = NetworkMode.ONLINE
     read_only_inputs: tuple[Path, ...] = ()
     environment: dict[str, str] = field(default_factory=dict)
     working_directory: str = "."

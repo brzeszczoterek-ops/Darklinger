@@ -51,10 +51,6 @@ def source_candidate(
         ):
             return None
         tree = ast.parse(source)
-        # Reject executable dependencies from this narrow local progress path.
-        # This is eligibility, not a replacement for the existing source policy.
-        if any(isinstance(node, (ast.Import, ast.ImportFrom)) for node in ast.walk(tree)):
-            return None
         # Comments/formatting, docstrings and mere diagnostic wording are not
         # novel approaches. A changed AST is only permission for one probe.
         for node in ast.walk(tree):

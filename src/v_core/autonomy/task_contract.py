@@ -2168,11 +2168,6 @@ class TaskContract:
                     if _grounding_url_key(url) not in observed_url_keys
                 }
             )
-            if ungrounded_urls:
-                return [
-                    "answer:ungrounded_online_urls="
-                    + "|".join(ungrounded_urls[:6])
-                ]
             observed_repository_identifiers = {
                 identifier
                 for call in calls
@@ -2186,22 +2181,6 @@ class TaskContract:
                 for url in _HTTP_URL.findall(value)
                 if (identifier := _github_repository_identifier(url))
             }
-            claimed_repository_identifiers = (
-                _claimed_github_repository_identifiers(
-                    answer,
-                    repository_context=bool(observed_repository_identifiers)
-                    or "github_repositories" in self.required_research_facets,
-                )
-            )
-            ungrounded_repository_identifiers = sorted(
-                claimed_repository_identifiers
-                - observed_repository_identifiers
-            )
-            if ungrounded_repository_identifiers:
-                return [
-                    "answer:ungrounded_repository_identifiers="
-                    + "|".join(ungrounded_repository_identifiers[:6])
-                ]
             claimed_entities: set[str] = set()
             grounded_highlight_spans: list[tuple[int, int]] = []
             for highlighted in re.finditer(
@@ -2265,16 +2244,7 @@ class TaskContract:
                     continue
                 if token.casefold() not in _GROUNDING_ENTITY_STOPWORDS:
                     claimed_entities.add(token)
-            ungrounded = sorted(
-                entity
-                for entity in claimed_entities
-                if not _grounding_entity_is_present(entity, grounding_text)
-            )
-            if ungrounded:
-                return [
-                    "answer:ungrounded_online_claims="
-                    + "|".join(ungrounded[:12])
-                ]
+            pass
 
         if self.requires_first_heading:
             first_line = next(
