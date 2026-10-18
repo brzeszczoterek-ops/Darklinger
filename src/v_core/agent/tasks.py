@@ -94,24 +94,24 @@ from ..execution_claims import (
 from ..persona.kernel import IdentityKernel
 from ..persona.voice import (
     VoiceProfile,
-    is_identity_inquiry,
-    is_origin_inquiry,
-    render_identity_response,
-    render_origin_response,
-    is_direct_greeting,
-    render_greeting_response,
+    looks_bland_clarification,
+    looks_empty_action_acknowledgement,
+    looks_direct_refusal,
+    looks_generic_assistant_voice,
+    looks_sanitized_contempt,
+    looks_task_offloading,
 )
 from ..persona.runtime import PersonaRuntime
 from ..persona.context import PersonaContext
 from ..persona.grounding import claims_physical_experience, claims_unobserved_runtime_status
 from ..persona.language import (
-    is_english,
-    is_polish,
-    contains_polish,
-    detect_language_name,
-    is_target_language,
-    normalize_language_target,
-    prompt_requests_language,
+    asks_user_to_use_english,
+    explicitly_requests_non_english,
+    looks_non_english,
+    matches_requested_language,
+    literal_identifiers,
+    normalize_literal_reply,
+    preserve_literal_identifiers,
 )
 
 
