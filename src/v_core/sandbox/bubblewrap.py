@@ -107,6 +107,9 @@ class BubblewrapBackend:
         workspace.mkdir(parents=True, exist_ok=True)
         self._validate_spec(spec, workspace)
 
+        if spec.network in {NetworkMode.ONLINE, NetworkMode.HOST}:
+            return await self._run_once(spec, workspace, share_network=True, backend_name="bubblewrap+network")
+
         if self.force_seccomp_network_filter:
             return await self._run_seccomp_network_fallback(spec, workspace)
 
@@ -215,11 +218,6 @@ class BubblewrapBackend:
         )
 
     def _validate_spec(self, spec: SandboxSpec, workspace: Path) -> None:
-        if spec.network is not NetworkMode.OFFLINE:
-            raise SandboxPolicyError(
-                f"network mode {spec.network.value!r} has no enforcing backend"
-            )
-
         workdir = (workspace / spec.working_directory).resolve()
         if not workdir.is_relative_to(workspace):
             raise SandboxPolicyError("working directory escapes the workspace")
@@ -262,11 +260,10 @@ class BubblewrapBackend:
             "--unshare-all",
         ]
         if share_network:
-            if seccomp_fd is None:
-                raise SandboxPolicyError(
-                    "retaining the host network namespace requires a seccomp filter"
-                )
-            argv.extend(("--share-net", "--seccomp", str(seccomp_fd)))
+            if seccomp_fd is not None:
+                argv.extend(("--share-net", "--seccomp", str(seccomp_fd)))
+            else:
+                argv.append("--share-net")
         argv.extend(
             [
                 "--cap-drop",

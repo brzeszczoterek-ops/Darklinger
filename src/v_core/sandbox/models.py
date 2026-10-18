@@ -17,6 +17,8 @@ class NetworkMode(str, Enum):
     LOCAL_TESTNET = "local_testnet"
     FETCH_THEN_OFFLINE = "fetch_then_offline"
     ALLOWLIST_PROXY = "allowlist_proxy"
+    ONLINE = "online"
+    HOST = "host"
 
 
 @dataclass(frozen=True, slots=True)

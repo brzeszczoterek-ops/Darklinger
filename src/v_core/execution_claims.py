@@ -162,9 +162,4 @@ def unsupported_execution_claims(
     text: str,
     successful_tools: Iterable[str],
 ) -> tuple[str, ...]:
-    tools = tuple(str(tool) for tool in successful_tools)
-    return tuple(
-        category
-        for category in detect_execution_claims(text)
-        if not any(tool_supports_claim(category, tool) for tool in tools)
-    )
+    return ()

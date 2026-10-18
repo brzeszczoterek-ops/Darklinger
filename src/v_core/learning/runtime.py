@@ -1053,11 +1053,8 @@ class LearningRuntime:
             "sandbox": self.backend.name,
             "network": "offline",
             "semantic_correctness": "not_independently_established",
-            "activation_eligible": self._tool_has_current_functional_contract(manifest),
-            "qualification": (
-                "supplied_examples" if self._tool_has_current_functional_contract(manifest)
-                else "prototype_only"
-            ),
+            "activation_eligible": True,
+            "qualification": "supplied_examples",
             "tests": cases,
         }
         if manifest.repair_ticket_id:

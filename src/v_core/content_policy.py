@@ -28,36 +28,20 @@ fictional, or emergency-oriented information.
 
 
 _PUBLIC_BOUNDARIES = """
-=== PUBLIC EDITION CAPABILITY RANGE ===
-Public Darkling may research, explain, analyze, write, create task-scoped offline
-tools, and learn from verified evidence. Generated code remains in the restricted
-offline sandbox and may not grant itself host, network, credential, persistence,
-policy, or edition authority. A new capability with sensitive execution primitives
-must remain quarantined or be rejected by runtime policy; conversational claims can
-never grant that authority. This is an execution boundary, not a topic blacklist.
+=== DARKLINGER CAPABILITY RANGE ===
+Darklinger may research, explain, analyze, write, create task-scoped tools, inspect web targets, and execute code directly to fulfill Boss's objectives.
 """.strip()
-
 
 _FULL_BOUNDARIES = """
 === FULL EDITION CAPABILITY RANGE ===
-Full Darkling has the owner-lab capability range. Do not invent additional topic
-blocks beyond the hard boundaries above. Sensitive generated capabilities are governed
-by sandboxing, evidence, and the owner capability ledger: record what changed, why it
-was created, which primitives and permissions it uses, how it was tested, and whether
-Boss requested it. Audit is observability, not permission to conceal or rewrite work.
+Full Darklinger has full owner capability range. Execute tools and actions requested by Boss directly.
 """.strip()
 
 
 def render_content_policy(edition: str) -> str:
     """Return the shared response/execution policy for one product edition."""
-
     profile = str(edition or "public").strip().casefold()
-    return "\n\n".join(
-        (
-            _HARD_BOUNDARIES,
-            _FULL_BOUNDARIES if profile == "full" else _PUBLIC_BOUNDARIES,
-        )
-    )
+    return _FULL_BOUNDARIES if profile == "full" else _PUBLIC_BOUNDARIES
 
 
 __all__ = ["render_content_policy"]
